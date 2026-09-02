@@ -14143,6 +14143,1019 @@ streams:
           - string
   type: DeclarativeStream
   name: "report_webinar_participants"
+- retriever:
+    requester:
+      url_base: "https://api.zoom.us/v2"
+      http_method: "GET"
+      authenticator:
+        class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+        client_id: "{{ config['client_id'] }}"
+        account_id: "{{ config['account_id'] }}"
+        client_secret: "{{ config['client_secret'] }}"
+        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+        grant_type: "account_credentials"
+        type: CustomAuthenticator
+      type: HttpRequester
+      path: "/phone/users"
+    paginator:
+      type: DefaultPaginator
+      pagination_strategy:
+        type: "CursorPagination"
+        cursor_value: "{{ response.next_page_token }}"
+        stop_condition: "{{ response.next_page_token == '' }}"
+        page_size: 100
+      page_size_option:
+        field_name: "page_size"
+        inject_into: "request_parameter"
+        type: RequestOption
+      page_token_option:
+        type: RequestOption
+        field_name: "next_page_token"
+        inject_into: "request_parameter"
+    record_selector:
+      extractor:
+        type: DpathExtractor
+        field_path:
+        - "users"
+      type: RecordSelector
+    type: SimpleRetriever
+  schema_loader:
+    type: InlineSchemaLoader
+    schema:
+      $schema: http://json-schema.org/draft-07/schema#
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type:
+          - 'null'
+          - string
+        phone_user_id:
+          type:
+          - 'null'
+          - string
+        email:
+          type:
+          - 'null'
+          - string
+        name:
+          type:
+          - 'null'
+          - string
+        extension_id:
+          type:
+          - 'null'
+          - string
+        extension_number:
+          type:
+          - 'null'
+          - integer
+        status:
+          type:
+          - 'null'
+          - string
+        activation_status:
+          type:
+          - 'null'
+          - string
+        department:
+          type:
+          - 'null'
+          - string
+        cost_center:
+          type:
+          - 'null'
+          - string
+        site:
+          type:
+          - 'null'
+          - object
+          additionalProperties: true
+          properties:
+            id:
+              type:
+              - 'null'
+              - string
+            name:
+              type:
+              - 'null'
+              - string
+        phone_numbers:
+          type:
+          - 'null'
+          - array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              id:
+                type:
+                - 'null'
+                - string
+              number:
+                type:
+                - 'null'
+                - string
+        calling_plans:
+          type:
+          - 'null'
+          - array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              name:
+                type:
+                - 'null'
+                - string
+              type:
+                type:
+                - 'null'
+                - integer
+              billing_account_id:
+                type:
+                - 'null'
+                - string
+              billing_account_name:
+                type:
+                - 'null'
+                - string
+              billing_subscription_id:
+                type:
+                - 'null'
+                - string
+              billing_subscription_name:
+                type:
+                - 'null'
+                - string
+  type: DeclarativeStream
+  name: "phone_users"
+  primary_key: "id"
+- retriever:
+    requester:
+      url_base: "https://api.zoom.us/v2"
+      http_method: "GET"
+      authenticator:
+        class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+        client_id: "{{ config['client_id'] }}"
+        account_id: "{{ config['account_id'] }}"
+        client_secret: "{{ config['client_secret'] }}"
+        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+        grant_type: "account_credentials"
+        type: CustomAuthenticator
+      type: HttpRequester
+      path: "/phone/call_history"
+    paginator:
+      type: DefaultPaginator
+      pagination_strategy:
+        type: "CursorPagination"
+        cursor_value: "{{ response.next_page_token }}"
+        stop_condition: "{{ response.next_page_token == '' }}"
+        page_size: 300
+      page_size_option:
+        field_name: "page_size"
+        inject_into: "request_parameter"
+        type: RequestOption
+      page_token_option:
+        type: RequestOption
+        field_name: "next_page_token"
+        inject_into: "request_parameter"
+    record_selector:
+      extractor:
+        type: DpathExtractor
+        field_path:
+        - "call_history"
+      type: RecordSelector
+    partition_router:
+      type: ListPartitionRouter
+      cursor_field: "recording_status"
+      values:
+      - "recorded"
+      - "non_recorded"
+      request_option:
+        type: RequestOption
+        field_name: "recording_status"
+        inject_into: "request_parameter"
+    type: SimpleRetriever
+  incremental_sync:
+    type: DatetimeBasedCursor
+    cursor_field: "start_time"
+    datetime_format: "%Y-%m-%d"
+    cursor_datetime_formats:
+    - "%Y-%m-%dT%H:%M:%SZ"
+    - "%Y-%m-%dT%H:%M:%S.%fZ"
+    - "%Y-%m-%d"
+    start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+    end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
+    cursor_granularity: "P1D"
+    step: "P30D"
+    lookback_window: "P1D"
+    start_time_option:
+      type: RequestOption
+      field_name: "from"
+      inject_into: "request_parameter"
+    end_time_option:
+      type: RequestOption
+      field_name: "to"
+      inject_into: "request_parameter"
+  schema_loader:
+    type: InlineSchemaLoader
+    schema:
+      $schema: http://json-schema.org/draft-07/schema#
+      type: object
+      additionalProperties: true
+      properties:
+        call_history_uuid:
+          type:
+          - 'null'
+          - string
+        call_id:
+          type:
+          - 'null'
+          - string
+        call_result:
+          type:
+          - 'null'
+          - string
+        call_type:
+          type:
+          - 'null'
+          - string
+        connect_type:
+          type:
+          - 'null'
+          - string
+        direction:
+          type:
+          - 'null'
+          - string
+        start_time:
+          type:
+          - 'null'
+          - string
+        answer_time:
+          type:
+          - 'null'
+          - string
+        end_time:
+          type:
+          - 'null'
+          - string
+        duration:
+          type:
+          - 'null'
+          - number
+        recording_status:
+          type:
+          - 'null'
+          - string
+        caller_name:
+          type:
+          - 'null'
+          - string
+        caller_email:
+          type:
+          - 'null'
+          - string
+        caller_ext_id:
+          type:
+          - 'null'
+          - string
+        caller_ext_number:
+          type:
+          - 'null'
+          - string
+        caller_ext_type:
+          type:
+          - 'null'
+          - string
+        callee_name:
+          type:
+          - 'null'
+          - string
+        callee_email:
+          type:
+          - 'null'
+          - string
+        callee_ext_id:
+          type:
+          - 'null'
+          - string
+        callee_ext_number:
+          type:
+          - 'null'
+          - string
+        callee_ext_type:
+          type:
+          - 'null'
+          - string
+        site_id:
+          type:
+          - 'null'
+          - string
+        site_name:
+          type:
+          - 'null'
+          - string
+        group_id:
+          type:
+          - 'null'
+          - string
+        department:
+          type:
+          - 'null'
+          - string
+        cost_center:
+          type:
+          - 'null'
+          - string
+  type: DeclarativeStream
+  name: "phone_call_history"
+  primary_key: "call_history_uuid"
+- retriever:
+    requester:
+      url_base: "https://api.zoom.us/v2"
+      http_method: "GET"
+      authenticator:
+        class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+        client_id: "{{ config['client_id'] }}"
+        account_id: "{{ config['account_id'] }}"
+        client_secret: "{{ config['client_secret'] }}"
+        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+        grant_type: "account_credentials"
+        type: CustomAuthenticator
+      type: HttpRequester
+      path: "/phone/recordings"
+    paginator:
+      type: DefaultPaginator
+      pagination_strategy:
+        type: "CursorPagination"
+        cursor_value: "{{ response.next_page_token }}"
+        stop_condition: "{{ response.next_page_token == '' }}"
+        page_size: 300
+      page_size_option:
+        field_name: "page_size"
+        inject_into: "request_parameter"
+        type: RequestOption
+      page_token_option:
+        type: RequestOption
+        field_name: "next_page_token"
+        inject_into: "request_parameter"
+    record_selector:
+      extractor:
+        type: DpathExtractor
+        field_path:
+        - "recordings"
+      type: RecordSelector
+    type: SimpleRetriever
+  incremental_sync:
+    type: DatetimeBasedCursor
+    cursor_field: "date_time"
+    datetime_format: "%Y-%m-%d"
+    cursor_datetime_formats:
+    - "%Y-%m-%dT%H:%M:%SZ"
+    - "%Y-%m-%dT%H:%M:%S.%fZ"
+    - "%Y-%m-%d"
+    start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+    end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
+    cursor_granularity: "P1D"
+    step: "P30D"
+    lookback_window: "P7D"
+    start_time_option:
+      type: RequestOption
+      field_name: "from"
+      inject_into: "request_parameter"
+    end_time_option:
+      type: RequestOption
+      field_name: "to"
+      inject_into: "request_parameter"
+  schema_loader:
+    type: InlineSchemaLoader
+    schema:
+      $schema: http://json-schema.org/draft-07/schema#
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type:
+          - 'null'
+          - string
+        call_id:
+          type:
+          - 'null'
+          - string
+        call_log_id:
+          type:
+          - 'null'
+          - string
+        call_element_id:
+          type:
+          - 'null'
+          - string
+        date_time:
+          type:
+          - 'null'
+          - string
+        end_time:
+          type:
+          - 'null'
+          - string
+        duration:
+          type:
+          - 'null'
+          - number
+        direction:
+          type:
+          - 'null'
+          - string
+        recording_type:
+          type:
+          - 'null'
+          - string
+        download_url:
+          type:
+          - 'null'
+          - string
+        transcript_download_url:
+          type:
+          - 'null'
+          - string
+        owner:
+          type:
+          - 'null'
+          - object
+        site:
+          type:
+          - 'null'
+          - object
+        caller_name:
+          type:
+          - 'null'
+          - string
+        caller_number:
+          type:
+          - 'null'
+          - string
+        caller_number_type:
+          type:
+          - 'null'
+          - string
+        callee_name:
+          type:
+          - 'null'
+          - string
+        callee_number:
+          type:
+          - 'null'
+          - string
+        callee_number_type:
+          type:
+          - 'null'
+          - string
+        accepted_by:
+          type:
+          - 'null'
+          - string
+        outgoing_by:
+          type:
+          - 'null'
+          - string
+        meeting_uuid:
+          type:
+          - 'null'
+          - string
+        disclaimer_status:
+          type:
+          - 'null'
+          - string
+        auto_delete_enable:
+          type:
+          - 'null'
+          - boolean
+        auto_delete_policy:
+          type:
+          - 'null'
+          - object
+  type: DeclarativeStream
+  name: "phone_recordings"
+  primary_key: "id"
+- retriever:
+    requester:
+      url_base: "https://api.zoom.us/v2"
+      http_method: "GET"
+      authenticator:
+        class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+        client_id: "{{ config['client_id'] }}"
+        account_id: "{{ config['account_id'] }}"
+        client_secret: "{{ config['client_secret'] }}"
+        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+        grant_type: "account_credentials"
+        type: CustomAuthenticator
+      path: "/phone/recording_transcript/download/{{ stream_partition.parent_id }}"
+      error_handler:
+        type: CompositeErrorHandler
+        error_handlers:
+        - type: DefaultErrorHandler
+          response_filters:
+          - predicate: "{{ response.get('code') in [404, 12000, 12001, 12002, 12003] }}"
+            action: IGNORE
+            type: HttpResponseFilter
+        - type: DefaultErrorHandler
+      type: HttpRequester
+    record_selector:
+      extractor:
+        type: DpathExtractor
+        field_path: []
+      type: RecordSelector
+    partition_router:
+      type: SubstreamPartitionRouter
+      parent_stream_configs:
+      - stream:
+          retriever:
+            requester:
+              url_base: "https://api.zoom.us/v2"
+              http_method: "GET"
+              authenticator:
+                class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+                client_id: "{{ config['client_id'] }}"
+                account_id: "{{ config['account_id'] }}"
+                client_secret: "{{ config['client_secret'] }}"
+                authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+                grant_type: "account_credentials"
+                type: CustomAuthenticator
+              type: HttpRequester
+              path: "/phone/recordings"
+            paginator:
+              type: DefaultPaginator
+              pagination_strategy:
+                type: "CursorPagination"
+                cursor_value: "{{ response.next_page_token }}"
+                stop_condition: "{{ response.next_page_token == '' }}"
+                page_size: 300
+              page_size_option:
+                field_name: "page_size"
+                inject_into: "request_parameter"
+                type: RequestOption
+              page_token_option:
+                type: RequestOption
+                field_name: "next_page_token"
+                inject_into: "request_parameter"
+            record_selector:
+              extractor:
+                type: DpathExtractor
+                field_path:
+                - "recordings"
+              record_filter:
+                type: RecordFilter
+                condition: "{{ record.get('transcript_download_url') != None and record.get('transcript_download_url') != '' }}"
+              type: RecordSelector
+            type: SimpleRetriever
+          incremental_sync:
+            type: DatetimeBasedCursor
+            cursor_field: "date_time"
+            datetime_format: "%Y-%m-%d"
+            cursor_datetime_formats:
+            - "%Y-%m-%dT%H:%M:%SZ"
+            - "%Y-%m-%dT%H:%M:%S.%fZ"
+            - "%Y-%m-%d"
+            start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+            end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
+            cursor_granularity: "P1D"
+            step: "P30D"
+            lookback_window: "P7D"
+            start_time_option:
+              type: RequestOption
+              field_name: "from"
+              inject_into: "request_parameter"
+            end_time_option:
+              type: RequestOption
+              field_name: "to"
+              inject_into: "request_parameter"
+          schema_loader:
+            type: InlineSchemaLoader
+            schema:
+              $schema: http://json-schema.org/draft-07/schema#
+              type: object
+              additionalProperties: true
+              properties:
+                id:
+                  type:
+                  - 'null'
+                  - string
+                call_id:
+                  type:
+                  - 'null'
+                  - string
+                call_log_id:
+                  type:
+                  - 'null'
+                  - string
+                date_time:
+                  type:
+                  - 'null'
+                  - string
+                transcript_download_url:
+                  type:
+                  - 'null'
+                  - string
+          type: DeclarativeStream
+          name: "phone_recordings"
+          primary_key: "id"
+        parent_key: "id"
+        partition_field: "parent_id"
+        incremental_dependency: true
+        extra_fields:
+        - - "call_id"
+        - - "call_log_id"
+        - - "date_time"
+        type: ParentStreamConfig
+    type: SimpleRetriever
+  incremental_sync:
+    type: DatetimeBasedCursor
+    cursor_field: "recording_date_time"
+    datetime_format: "%Y-%m-%d"
+    cursor_datetime_formats:
+    - "%Y-%m-%dT%H:%M:%SZ"
+    - "%Y-%m-%dT%H:%M:%S.%fZ"
+    - "%Y-%m-%d"
+    start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+    end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
+    cursor_granularity: "P1D"
+    step: "P30D"
+    lookback_window: "P7D"
+  transformations:
+  - type: AddFields
+    fields:
+    - path:
+      - "recording_id"
+      value: "{{ stream_partition.parent_id }}"
+      type: AddedFieldDefinition
+    - path:
+      - "call_id"
+      value: "{{ stream_slice.extra_fields['call_id'] }}"
+      type: AddedFieldDefinition
+    - path:
+      - "call_log_id"
+      value: "{{ stream_slice.extra_fields['call_log_id'] }}"
+      type: AddedFieldDefinition
+    - path:
+      - "recording_date_time"
+      value: "{{ stream_slice.extra_fields['date_time'] }}"
+      type: AddedFieldDefinition
+  schema_loader:
+    type: InlineSchemaLoader
+    schema:
+      $schema: http://json-schema.org/draft-07/schema#
+      type: object
+      additionalProperties: true
+      properties:
+        recording_id:
+          type:
+          - 'null'
+          - string
+        call_id:
+          type:
+          - 'null'
+          - string
+        call_log_id:
+          type:
+          - 'null'
+          - string
+        recording_date_time:
+          type:
+          - 'null'
+          - string
+        type:
+          type:
+          - 'null'
+          - string
+        ver:
+          type:
+          - 'null'
+          - string
+        meeting_id:
+          type:
+          - 'null'
+          - string
+        account_id:
+          type:
+          - 'null'
+          - string
+        host_id:
+          type:
+          - 'null'
+          - string
+        recording_start:
+          type:
+          - 'null'
+          - string
+        recording_end:
+          type:
+          - 'null'
+          - string
+        timeline:
+          type:
+          - 'null'
+          - array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              text:
+                type:
+                - 'null'
+                - string
+              raw_text:
+                type:
+                - 'null'
+                - string
+              ts:
+                type:
+                - 'null'
+                - string
+                - number
+              end_ts:
+                type:
+                - 'null'
+                - string
+                - number
+              userId:
+                type:
+                - 'null'
+                - string
+              users:
+                type:
+                - 'null'
+                - array
+                items:
+                  type: object
+                  additionalProperties: true
+              userIds:
+                type:
+                - 'null'
+                - array
+                items:
+                  type:
+                  - 'null'
+                  - string
+              channelMark:
+                type:
+                - 'null'
+                - integer
+  type: DeclarativeStream
+  name: "phone_recording_transcripts"
+  primary_key: "recording_id"
+- retriever:
+    requester:
+      url_base: "https://api.zoom.us/v2"
+      http_method: "GET"
+      authenticator:
+        class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+        client_id: "{{ config['client_id'] }}"
+        account_id: "{{ config['account_id'] }}"
+        client_secret: "{{ config['client_secret'] }}"
+        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+        grant_type: "account_credentials"
+        type: CustomAuthenticator
+      path: "/phone/recording_transcript/download/{{ stream_partition.parent_id }}"
+      error_handler:
+        type: CompositeErrorHandler
+        error_handlers:
+        - type: DefaultErrorHandler
+          response_filters:
+          - predicate: "{{ response.get('code') in [404, 12000, 12001, 12002, 12003] }}"
+            action: IGNORE
+            type: HttpResponseFilter
+        - type: DefaultErrorHandler
+      type: HttpRequester
+    record_selector:
+      extractor:
+        type: DpathExtractor
+        field_path:
+        - "timeline"
+      type: RecordSelector
+    partition_router:
+      type: SubstreamPartitionRouter
+      parent_stream_configs:
+      - stream:
+          retriever:
+            requester:
+              url_base: "https://api.zoom.us/v2"
+              http_method: "GET"
+              authenticator:
+                class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+                client_id: "{{ config['client_id'] }}"
+                account_id: "{{ config['account_id'] }}"
+                client_secret: "{{ config['client_secret'] }}"
+                authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+                grant_type: "account_credentials"
+                type: CustomAuthenticator
+              type: HttpRequester
+              path: "/phone/recordings"
+            paginator:
+              type: DefaultPaginator
+              pagination_strategy:
+                type: "CursorPagination"
+                cursor_value: "{{ response.next_page_token }}"
+                stop_condition: "{{ response.next_page_token == '' }}"
+                page_size: 300
+              page_size_option:
+                field_name: "page_size"
+                inject_into: "request_parameter"
+                type: RequestOption
+              page_token_option:
+                type: RequestOption
+                field_name: "next_page_token"
+                inject_into: "request_parameter"
+            record_selector:
+              extractor:
+                type: DpathExtractor
+                field_path:
+                - "recordings"
+              record_filter:
+                type: RecordFilter
+                condition: "{{ record.get('transcript_download_url') != None and record.get('transcript_download_url') != '' }}"
+              type: RecordSelector
+            type: SimpleRetriever
+          incremental_sync:
+            type: DatetimeBasedCursor
+            cursor_field: "date_time"
+            datetime_format: "%Y-%m-%d"
+            cursor_datetime_formats:
+            - "%Y-%m-%dT%H:%M:%SZ"
+            - "%Y-%m-%dT%H:%M:%S.%fZ"
+            - "%Y-%m-%d"
+            start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+            end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
+            cursor_granularity: "P1D"
+            step: "P30D"
+            lookback_window: "P7D"
+            start_time_option:
+              type: RequestOption
+              field_name: "from"
+              inject_into: "request_parameter"
+            end_time_option:
+              type: RequestOption
+              field_name: "to"
+              inject_into: "request_parameter"
+          schema_loader:
+            type: InlineSchemaLoader
+            schema:
+              $schema: http://json-schema.org/draft-07/schema#
+              type: object
+              additionalProperties: true
+              properties:
+                id:
+                  type:
+                  - 'null'
+                  - string
+                call_id:
+                  type:
+                  - 'null'
+                  - string
+                call_log_id:
+                  type:
+                  - 'null'
+                  - string
+                date_time:
+                  type:
+                  - 'null'
+                  - string
+                transcript_download_url:
+                  type:
+                  - 'null'
+                  - string
+          type: DeclarativeStream
+          name: "phone_recordings"
+          primary_key: "id"
+        parent_key: "id"
+        partition_field: "parent_id"
+        incremental_dependency: true
+        extra_fields:
+        - - "call_id"
+        - - "call_log_id"
+        - - "date_time"
+        type: ParentStreamConfig
+    type: SimpleRetriever
+  incremental_sync:
+    type: DatetimeBasedCursor
+    cursor_field: "recording_date_time"
+    datetime_format: "%Y-%m-%d"
+    cursor_datetime_formats:
+    - "%Y-%m-%dT%H:%M:%SZ"
+    - "%Y-%m-%dT%H:%M:%S.%fZ"
+    - "%Y-%m-%d"
+    start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+    end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
+    cursor_granularity: "P1D"
+    step: "P30D"
+    lookback_window: "P7D"
+  transformations:
+  - type: AddFields
+    fields:
+    - path:
+      - "segment_id"
+      value: "{{ stream_partition.parent_id }}-{{ record.get('ts', '') }}-{{ record.get('end_ts', '') }}-{{ record.get('userId', '') }}"
+      type: AddedFieldDefinition
+    - path:
+      - "recording_id"
+      value: "{{ stream_partition.parent_id }}"
+      type: AddedFieldDefinition
+    - path:
+      - "call_id"
+      value: "{{ stream_slice.extra_fields['call_id'] }}"
+      type: AddedFieldDefinition
+    - path:
+      - "call_log_id"
+      value: "{{ stream_slice.extra_fields['call_log_id'] }}"
+      type: AddedFieldDefinition
+    - path:
+      - "recording_date_time"
+      value: "{{ stream_slice.extra_fields['date_time'] }}"
+      type: AddedFieldDefinition
+  schema_loader:
+    type: InlineSchemaLoader
+    schema:
+      $schema: http://json-schema.org/draft-07/schema#
+      type: object
+      additionalProperties: true
+      properties:
+        segment_id:
+          type:
+          - 'null'
+          - string
+        recording_id:
+          type:
+          - 'null'
+          - string
+        call_id:
+          type:
+          - 'null'
+          - string
+        call_log_id:
+          type:
+          - 'null'
+          - string
+        recording_date_time:
+          type:
+          - 'null'
+          - string
+        text:
+          type:
+          - 'null'
+          - string
+        raw_text:
+          type:
+          - 'null'
+          - string
+        ts:
+          type:
+          - 'null'
+          - string
+          - number
+        end_ts:
+          type:
+          - 'null'
+          - string
+          - number
+        language:
+          type:
+          - 'null'
+          - string
+        userId:
+          type:
+          - 'null'
+          - string
+        userIds:
+          type:
+          - 'null'
+          - array
+          items:
+            type:
+            - 'null'
+            - string
+        channelMark:
+          type:
+          - 'null'
+          - string
+          - integer
+        users:
+          type:
+          - 'null'
+          - array
+          items:
+            type: object
+            additionalProperties: true
+        word_items:
+          type:
+          - 'null'
+          - array
+          items:
+            type: object
+            additionalProperties: true
+  type: DeclarativeStream
+  name: "phone_recording_transcript_segments"
+  primary_key: "segment_id"
 check:
   stream_names:
   - "users"
@@ -14182,3 +15195,12 @@ spec:
         type: string
         order: 3
         default: "https://zoom.us/oauth/token"
+        description: "The Zoom OAuth token endpoint."
+      phone_start_date:
+        type: string
+        order: 4
+        format: date
+        pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        examples:
+        - "2026-03-05"
+        description: "Optional start date for Zoom Phone incremental streams."
