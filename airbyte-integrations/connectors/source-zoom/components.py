@@ -3,16 +3,22 @@
 #
 
 import base64
+import re
 import time
-from dataclasses import dataclass
+from calendar import monthrange
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from http import HTTPStatus
-from typing import Any, Mapping, Optional, Union
+from threading import Lock
+from typing import Any, Callable, ClassVar, Dict, Mapping, Optional, Tuple, Union
+from urllib.parse import urlsplit
 
 import requests
 from requests import HTTPError
 
 from airbyte_cdk.sources.declarative.auth.declarative_authenticator import NoAuth
 from airbyte_cdk.sources.declarative.interpolation import InterpolatedString
+from airbyte_cdk.sources.declarative.requesters.http_requester import HttpRequester
 from airbyte_cdk.sources.declarative.types import Config
 
 
@@ -85,3 +91,241 @@ class ServerToServerOauthAuthenticator(NoAuth):
             return rest.json().get("access_token")
         except Exception as e:
             raise Exception(f"Error while generating access token: {e}") from e
+
+
+@dataclass
+class ZoomPhoneLoggingRequester(HttpRequester):
+    """
+    Adds compact Zoom Phone request telemetry without logging secrets, bodies,
+    pagination token values, or resolved path IDs.
+    """
+
+    rate_limit_category: str = "UNKNOWN"
+    history_limit_months: Optional[int] = None
+    _summary_every: ClassVar[int] = 100
+    _request_count: int = field(default=0, init=False, repr=False)
+    _cache_hit_count: int = field(default=0, init=False, repr=False)
+    _total_duration_ms: int = field(default=0, init=False, repr=False)
+    _history_limit_checked: bool = field(default=False, init=False, repr=False)
+
+    @staticmethod
+    def _raw_value(value: Any) -> str:
+        if isinstance(value, InterpolatedString):
+            return value.string
+        return str(value or "")
+
+    def _safe_endpoint(self, url: str) -> str:
+        raw_path = self._raw_value(self.path)
+        if not raw_path:
+            return urlsplit(url).path
+
+        raw_base = self._raw_value(self.url_base)
+        base_path = urlsplit(raw_base).path.rstrip("/") if raw_base else ""
+        endpoint = f"{base_path}/{raw_path.lstrip('/')}"
+        endpoint = re.sub(
+            r"\{\{\s*([^{}]+?)\s*\}\}",
+            lambda match: "{" + match.group(1).strip() + "}",
+            endpoint,
+        )
+        return "/" + endpoint.lstrip("/")
+
+    @staticmethod
+    def _months_ago(months: int) -> date:
+        today = datetime.now(timezone.utc).date()
+        month_index = today.year * 12 + today.month - 1 - months
+        year, zero_based_month = divmod(month_index, 12)
+        month = zero_based_month + 1
+        day = min(today.day, monthrange(year, month)[1])
+        return date(year, month, day)
+
+    def _check_history_limit(self) -> None:
+        if self._history_limit_checked or self.history_limit_months is None:
+            return
+
+        self._history_limit_checked = True
+        configured_start = self.config.get("phone_start_date")
+        if not configured_start:
+            return
+
+        try:
+            requested_start = date.fromisoformat(str(configured_start))
+        except (TypeError, ValueError):
+            return
+
+        earliest_start = self._months_ago(self.history_limit_months)
+        if requested_start < earliest_start:
+            self.logger.warning(
+                "Zoom API notice "
+                f"stream={self.name} "
+                f"requested_phone_start_date={requested_start.isoformat()} "
+                f"exceeds_zoom_history_window={self.history_limit_months}m "
+                f"effective_start_date={earliest_start.isoformat()}"
+            )
+
+    def _log_summary(self) -> None:
+        average_duration_ms = round(self._total_duration_ms / self._request_count)
+        fields = [
+            "Zoom API summary",
+            f"stream={self.name}",
+            f"requests={self._request_count}",
+            f"avg_duration_ms={average_duration_ms}",
+        ]
+
+        if self.use_cache:
+            cache_hit_rate = (self._cache_hit_count / self._request_count) * 100
+            fields.extend(
+                [
+                    f"cache_hits={self._cache_hit_count}",
+                    f"cache_hit_rate={cache_hit_rate:.1f}%",
+                ]
+            )
+
+        self.logger.info(" ".join(fields))
+
+    def send_request(
+        self,
+        stream_state: Optional[Any] = None,
+        stream_slice: Optional[Any] = None,
+        next_page_token: Optional[Mapping[str, Any]] = None,
+        path: Optional[str] = None,
+        request_headers: Optional[Mapping[str, Any]] = None,
+        request_params: Optional[Mapping[str, Any]] = None,
+        request_body_data: Optional[Union[Mapping[str, Any], str]] = None,
+        request_body_json: Optional[Mapping[str, Any]] = None,
+        log_formatter: Optional[Callable[[requests.Response], Any]] = None,
+    ) -> Optional[requests.Response]:
+        self._check_history_limit()
+        url = self._get_url(
+            path=path,
+            stream_state=stream_state,
+            stream_slice=stream_slice,
+            next_page_token=next_page_token,
+        )
+        endpoint = self._safe_endpoint(url)
+        params = self._request_params(
+            stream_state,
+            stream_slice,
+            next_page_token,
+            request_params,
+        )
+        started = time.monotonic()
+
+        try:
+            response = super().send_request(
+                stream_state=stream_state,
+                stream_slice=stream_slice,
+                next_page_token=next_page_token,
+                path=path,
+                request_headers=request_headers,
+                request_params=request_params,
+                request_body_data=request_body_data,
+                request_body_json=request_body_json,
+                log_formatter=log_formatter,
+            )
+        except Exception as exc:
+            duration_ms = round((time.monotonic() - started) * 1000)
+            self.logger.warning(
+                "Zoom API failed "
+                f"stream={self.name} "
+                f"method={self.get_method().value} "
+                f"endpoint={endpoint} "
+                f"category={self.rate_limit_category} "
+                f"duration_ms={duration_ms} "
+                f"error={type(exc).__name__}"
+            )
+            raise
+
+        duration_ms = round((time.monotonic() - started) * 1000)
+
+        if response is None:
+            self.logger.warning(
+                "Zoom API response "
+                f"stream={self.name} "
+                f"method={self.get_method().value} "
+                f"endpoint={endpoint} "
+                f"category={self.rate_limit_category} "
+                f"status=none "
+                f"duration_ms={duration_ms}"
+            )
+            return response
+
+        headers = response.headers
+        from_cache = bool(getattr(response, "from_cache", False))
+        self._request_count += 1
+        self._total_duration_ms += duration_ms
+        if from_cache:
+            self._cache_hit_count += 1
+
+        fields = [
+            "Zoom API",
+            f"stream={self.name}",
+            f"method={self.get_method().value}",
+            f"endpoint={endpoint}",
+            f"category={self.rate_limit_category}",
+            f"status={response.status_code}",
+            f"duration_ms={duration_ms}",
+        ]
+
+        if self.use_cache:
+            fields.append(f"cache_hit={from_cache}")
+
+        if not from_cache:
+            fields.append(f"http_ms={round(response.elapsed.total_seconds() * 1000)}")
+
+        for key in ("from", "to", "recording_status", "page_size"):
+            value = params.get(key)
+            if value is not None:
+                fields.append(f"{key}={value}")
+
+        if next_page_token is not None:
+            fields.append("continuation=true")
+
+        zoom_headers = (
+            ("zoom_category", "X-RateLimit-Category"),
+            ("zoom_limit_type", "X-RateLimit-Type"),
+            ("zoom_limit", "X-RateLimit-Limit"),
+            ("zoom_remaining", "X-RateLimit-Remaining"),
+            ("retry_after", "Retry-After"),
+        )
+        for label, header_name in zoom_headers:
+            value = headers.get(header_name)
+            if value is not None:
+                fields.append(f"{label}={value}")
+
+        message = " ".join(fields)
+        if response.status_code == HTTPStatus.TOO_MANY_REQUESTS or response.status_code >= 500:
+            self.logger.warning(message)
+        else:
+            self.logger.debug(message)
+
+        if self._request_count % self._summary_every == 0:
+            self._log_summary()
+
+        return response
+
+
+@dataclass
+class SharedTranscriptCacheRequester(ZoomPhoneLoggingRequester):
+    """
+    Shares Airbyte's cached HTTP session between the two transcript streams so
+    identical transcript downloads can be reused without sharing HttpClient state.
+    """
+
+    _shared_sessions: ClassVar[Dict[Tuple[str, str], requests.Session]] = {}
+    _shared_sessions_lock: ClassVar[Lock] = Lock()
+
+    def __post_init__(self, parameters: Mapping[str, Any]) -> None:
+        self.use_cache = True
+        super().__post_init__(parameters)
+
+        cache_key = (
+            str(self.config.get("account_id", "")),
+            str(self.config.get("client_id", "")),
+        )
+
+        with self._shared_sessions_lock:
+            shared_session = self._shared_sessions.get(cache_key)
+            if shared_session is None:
+                self._shared_sessions[cache_key] = self._http_client._session
+            else:
+                self._http_client._session = shared_session
