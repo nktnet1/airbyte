@@ -26,6 +26,7 @@ class UscreenHttpRequester(HttpRequester):
         self._elapsed_total = 0.0
         self._elapsed_max = 0.0
         self._statuses: Counter[int] = Counter()
+        self._http_error_samples: Counter[int] = Counter()
 
     @property
     def _stream_name(self) -> str:
@@ -124,6 +125,47 @@ class UscreenHttpRequester(HttpRequester):
                 empty_page_stops,
             )
 
+    def get_request_params(
+        self,
+        *,
+        stream_state=None,
+        stream_slice=None,
+        next_page_token=None,
+    ):
+        params = dict(
+            super().get_request_params(
+                stream_state=stream_state,
+                stream_slice=stream_slice,
+                next_page_token=next_page_token,
+            )
+        )
+
+        partition_fields = {
+            "user_views": ("user_id", "user_id"),
+            "user_total_watch_time": ("user_id", "user_id"),
+            "content_views": ("content_id", "content_id"),
+            "content_total_watch_time": ("content_id", "content_id"),
+        }
+        partition = partition_fields.get(self._stream_name)
+
+        if partition and stream_slice:
+            slice_field, request_field = partition
+            value = stream_slice.get(slice_field)
+            if isinstance(value, list):
+                value = value[0] if len(value) == 1 else None
+
+            if value is not None:
+                params[request_field] = value
+
+            start_date = self.config.get("start_date")
+            end_date = self.config.get("end_date")
+            if start_date:
+                params["from"] = start_date
+            if end_date:
+                params["to"] = end_date
+
+        return params
+
     def send_request(self, *args: Any, **kwargs: Any):
         started = time.monotonic()
         try:
@@ -142,8 +184,20 @@ class UscreenHttpRequester(HttpRequester):
         stop_reason = self._apply_pagination_guard(response) if response is not None else None
         self._record_result(response, elapsed, stop_reason)
 
+        status = getattr(response, "status_code", None) if response is not None else None
+        if isinstance(status, int) and status >= 400:
+            with self._metrics_lock:
+                self._http_error_samples[status] += 1
+                sample_number = self._http_error_samples[status]
+            if sample_number <= 3:
+                LOGGER.warning(
+                    "[uscreen] stream=%s status=%s url=%s",
+                    self._stream_name,
+                    status,
+                    getattr(response, "url", None),
+                )
+
         if elapsed >= SLOW_REQUEST_SECONDS:
-            status = getattr(response, "status_code", None) if response is not None else None
             LOGGER.warning(
                 "[uscreen] stream=%s slow_request elapsed=%.3fs status=%s",
                 self._stream_name,
