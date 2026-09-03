@@ -1,0 +1,64 @@
+name: Release Source Zoom
+
+on:
+  push:
+    tags:
+      - "source-zoom-v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Airbyte CDK
+        run: |
+          uv tool install 'airbyte-cdk[dev]'
+          echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#source-zoom-v}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing Source Zoom version: $VERSION"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Source Zoom image
+        working-directory: airbyte-integrations/connectors/source-zoom
+        run: |
+          airbyte-cdk image build . \
+            --tag "${{ steps.version.outputs.version }}"
+
+      - name: Tag Source Zoom image
+        run: |
+          docker tag \
+            "airbyte/source-zoom:${{ steps.version.outputs.version }}" \
+            "ghcr.io/${{ github.repository_owner }}/airbyte-source-zoom:${{ steps.version.outputs.version }}"
+
+      - name: Push Source Zoom image
+        run: |
+          docker push \
+            "ghcr.io/${{ github.repository_owner }}/airbyte-source-zoom:${{ steps.version.outputs.version }}"
