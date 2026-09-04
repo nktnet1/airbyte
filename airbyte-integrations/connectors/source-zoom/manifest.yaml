@@ -1,4 +1,8 @@
 version: 5.14.0
+concurrency_level:
+  type: ConcurrencyLevel
+  default_concurrency: "{{ config.get('num_workers', 20) }}"
+  max_concurrency: 40
 definitions:
   requester:
     url_base: "https://api.zoom.us/v2"
@@ -15336,6 +15340,14 @@ spec:
         examples:
         - "2026-03-05"
         description: "Optional start date for Zoom Phone data. Unlike other streams, the call history will only this date when it falls within Zoom's six-month report window"
+      num_workers:
+        type: integer
+        title: "Concurrent Workers"
+        order: 5
+        minimum: 2
+        maximum: 40
+        default: 20
+        description: "Number of Airbyte worker threads available for concurrent stream processing. API-specific request rates are still limited by the configured Zoom Phone API budgets."
       phone_light_requests_per_second:
         type: integer
         order: 7

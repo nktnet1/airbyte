@@ -9,6 +9,7 @@ from calendar import monthrange
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
+from threading import Lock
 from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Union
 from urllib.parse import urlsplit
 
@@ -53,6 +54,7 @@ class ServerToServerOauthAuthenticator(NoAuth):
     _generate_token_time = 0
     _access_token = None
     _grant_type = "account_credentials"
+    _token_lock: ClassVar[Lock] = Lock()
 
     def __post_init__(self, parameters: Mapping[str, Any]):
         self._account_id = InterpolatedString.create(self.account_id, parameters=parameters).eval(self.config)
@@ -63,8 +65,9 @@ class ServerToServerOauthAuthenticator(NoAuth):
     def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
         """Attach the page access token to params to authenticate on the HTTP request"""
         if self._access_token is None or ((time.time() - self._generate_token_time) > BEARER_TOKEN_EXPIRES_IN):
-            self._generate_token_time = time.time()
-            self._access_token = self.generate_access_token()
+            with self._token_lock:
+                if self._access_token is None or ((time.time() - self._generate_token_time) > BEARER_TOKEN_EXPIRES_IN):
+                    self._access_token = self.generate_access_token()
         headers = {"Authorization": f"Bearer {self._access_token}", "Content-type": "application/json"}
         request.headers.update(headers)
 
