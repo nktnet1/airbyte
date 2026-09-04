@@ -3,6 +3,7 @@
 #
 
 import base64
+import logging
 import re
 import time
 from calendar import monthrange
@@ -313,14 +314,49 @@ class ZoomPhoneLoggingRequester(HttpRequester):
 @dataclass
 class TimelineRetriever(Retriever):
     """
-    Expands the transcript parent's ``timeline`` array into child records.
+    Expands the transcript parent's lazily extracted ``timeline`` response into
+    child records without making additional HTTP requests.
 
-    This retriever performs no HTTP requests. The transcript response is read by
-    the parent ``phone_recording_transcripts`` stream and passed through the
-    substream slice as an extra field.
+    ``SubstreamPartitionRouter.lazy_read_pointer`` serializes the transcript's
+    ``timeline`` array into ``stream_slice.extra_fields["child_response"]``.
+    This keeps queued child partitions compact instead of retaining the full
+    timeline as a Python list of dictionaries.
     """
 
     config: Config
+    _progress_every: ClassVar[int] = 5000
+    _emitted_count: int = field(default=0, init=False, repr=False)
+    _partition_count: int = field(default=0, init=False, repr=False)
+    _next_progress_at: int = field(default=5000, init=False, repr=False)
+    _progress_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _logger: logging.Logger = field(
+        default_factory=lambda: logging.getLogger(__name__),
+        init=False,
+        repr=False,
+    )
+
+    def _record_progress(self, current_partition_events: int) -> None:
+        should_log = False
+        with self._progress_lock:
+            self._emitted_count += 1
+            if self._emitted_count >= self._next_progress_at:
+                emitted_count = self._emitted_count
+                partition_count = self._partition_count
+                self._next_progress_at += self._progress_every
+                should_log = True
+
+        if should_log:
+            self._logger.info(
+                "Timeline progress "
+                f"stream=phone_recording_transcript_timeline "
+                f"emitted={emitted_count} "
+                f"completed_transcripts={partition_count} "
+                f"current_transcript_events={current_partition_events}"
+            )
+
+    def _record_partition_complete(self) -> None:
+        with self._progress_lock:
+            self._partition_count += 1
 
     def read_records(
         self,
@@ -331,20 +367,41 @@ class TimelineRetriever(Retriever):
             return
 
         extra_fields = stream_slice.extra_fields or {}
-        timeline = extra_fields.get("timeline")
+        child_response = extra_fields.get("child_response")
+        if child_response is None:
+            return
+
+        try:
+            timeline = child_response.json()
+        except (TypeError, ValueError):
+            return
+
         if not isinstance(timeline, list):
             return
+
+        # The serialized lazy payload is no longer needed once parsed. Clearing
+        # it avoids retaining both the JSON bytes and the expanded Python list
+        # while this partition is being drained.
+        try:
+            child_response._content = b""
+        except (AttributeError, TypeError):
+            pass
 
         recording_id = str(stream_slice.partition.get("parent_id", ""))
         call_id = extra_fields.get("call_id")
         call_log_id = extra_fields.get("call_log_id")
         recording_date_time = extra_fields.get("recording_date_time")
 
-        for item in timeline:
+        for index, item in enumerate(timeline):
             if not isinstance(item, Mapping):
+                timeline[index] = None
                 continue
 
             record = dict(item)
+            # Release the original timeline object before yielding so processed
+            # entries can be reclaimed progressively during large transcripts.
+            timeline[index] = None
+
             record["timeline_id"] = (
                 f"{recording_id}-{record.get('ts', '')}-{record.get('end_ts', '')}-"
                 f"{record.get('userId', '')}"
@@ -353,4 +410,7 @@ class TimelineRetriever(Retriever):
             record["call_id"] = call_id
             record["call_log_id"] = call_log_id
             record["recording_date_time"] = recording_date_time
+            self._record_progress(len(timeline))
             yield record
+
+        self._record_partition_complete()

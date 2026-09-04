@@ -15162,8 +15162,9 @@ streams:
         parent_key: recording_id
         partition_field: parent_id
         incremental_dependency: true
+        lazy_read_pointer:
+        - timeline
         extra_fields:
-        - - timeline
         - - call_id
         - - call_log_id
         - - recording_date_time
