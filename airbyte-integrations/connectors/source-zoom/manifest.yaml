@@ -14822,9 +14822,7 @@ streams:
           - 'null'
           - string
         ver:
-          type:
-          - 'null'
-          - string
+          type: integer
         meeting_id:
           type:
           - 'null'
@@ -14893,7 +14891,7 @@ streams:
               channelMark:
                 type:
                 - 'null'
-                - integer
+                - string
       required:
       - recording_id
   type: DeclarativeStream
