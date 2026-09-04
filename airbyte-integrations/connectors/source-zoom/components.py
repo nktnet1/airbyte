@@ -324,10 +324,10 @@ class TimelineRetriever(Retriever):
     """
 
     config: Config
-    _progress_every: ClassVar[int] = 5000
+    _progress_every: ClassVar[int] = 1000
     _emitted_count: int = field(default=0, init=False, repr=False)
     _partition_count: int = field(default=0, init=False, repr=False)
-    _next_progress_at: int = field(default=5000, init=False, repr=False)
+    _next_progress_at: int = field(default=1000, init=False, repr=False)
     _progress_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _logger: logging.Logger = field(
         default_factory=lambda: logging.getLogger(__name__),
@@ -387,7 +387,22 @@ class TimelineRetriever(Retriever):
         except (AttributeError, TypeError):
             pass
 
-        recording_id = str(stream_slice.partition.get("parent_id", ""))
+        # Prefer identifiers carried by Zoom in the parent transcript record.
+        # Only fall back to the Airbyte partition value if both Zoom identifiers
+        # are unavailable, because substream partition context can be lost while
+        # concurrent/incremental slices are propagated.
+        recording_id_value = (
+            extra_fields.get("recording_id")
+            or extra_fields.get("meeting_id")
+            or stream_slice.partition.get("parent_id")
+        )
+        recording_id = str(recording_id_value).strip() if recording_id_value is not None else ""
+        if not recording_id:
+            self._logger.warning(
+                "Timeline skipped stream=phone_recording_transcript_timeline "
+                "reason=missing_required_recording_id"
+            )
+            return
         call_id = extra_fields.get("call_id")
         call_log_id = extra_fields.get("call_log_id")
         recording_date_time = extra_fields.get("recording_date_time")
