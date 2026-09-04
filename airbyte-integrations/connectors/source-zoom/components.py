@@ -9,8 +9,7 @@ from calendar import monthrange
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from http import HTTPStatus
-from threading import Lock
-from typing import Any, Callable, ClassVar, Dict, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Union
 from urllib.parse import urlsplit
 
 import requests
@@ -19,7 +18,8 @@ from requests import HTTPError
 from airbyte_cdk.sources.declarative.auth.declarative_authenticator import NoAuth
 from airbyte_cdk.sources.declarative.interpolation import InterpolatedString
 from airbyte_cdk.sources.declarative.requesters.http_requester import HttpRequester
-from airbyte_cdk.sources.declarative.types import Config
+from airbyte_cdk.sources.declarative.retrievers import Retriever
+from airbyte_cdk.sources.declarative.types import Config, StreamSlice
 
 
 # https://developers.zoom.us/docs/internal-apps/s2s-oauth/#successful-response
@@ -305,27 +305,46 @@ class ZoomPhoneLoggingRequester(HttpRequester):
 
 
 @dataclass
-class SharedTranscriptCacheRequester(ZoomPhoneLoggingRequester):
+class TimelineRetriever(Retriever):
     """
-    Shares Airbyte's cached HTTP session between the two transcript streams so
-    identical transcript downloads can be reused without sharing HttpClient state.
+    Expands the transcript parent's ``timeline`` array into child records.
+
+    This retriever performs no HTTP requests. The transcript response is read by
+    the parent ``phone_recording_transcripts`` stream and passed through the
+    substream slice as an extra field.
     """
 
-    _shared_sessions: ClassVar[Dict[Tuple[str, str], requests.Session]] = {}
-    _shared_sessions_lock: ClassVar[Lock] = Lock()
+    config: Config
 
-    def __post_init__(self, parameters: Mapping[str, Any]) -> None:
-        self.use_cache = True
-        super().__post_init__(parameters)
+    def read_records(
+        self,
+        records_schema: Mapping[str, Any],
+        stream_slice: Optional[StreamSlice] = None,
+    ) -> Iterable[Mapping[str, Any]]:
+        if stream_slice is None:
+            return
 
-        cache_key = (
-            str(self.config.get("account_id", "")),
-            str(self.config.get("client_id", "")),
-        )
+        extra_fields = stream_slice.extra_fields or {}
+        timeline = extra_fields.get("timeline")
+        if not isinstance(timeline, list):
+            return
 
-        with self._shared_sessions_lock:
-            shared_session = self._shared_sessions.get(cache_key)
-            if shared_session is None:
-                self._shared_sessions[cache_key] = self._http_client._session
-            else:
-                self._http_client._session = shared_session
+        recording_id = str(stream_slice.partition.get("parent_id", ""))
+        call_id = extra_fields.get("call_id")
+        call_log_id = extra_fields.get("call_log_id")
+        recording_date_time = extra_fields.get("recording_date_time")
+
+        for item in timeline:
+            if not isinstance(item, Mapping):
+                continue
+
+            record = dict(item)
+            record["timeline_id"] = (
+                f"{recording_id}-{record.get('ts', '')}-{record.get('end_ts', '')}-"
+                f"{record.get('userId', '')}"
+            )
+            record["recording_id"] = recording_id
+            record["call_id"] = call_id
+            record["call_log_id"] = call_log_id
+            record["recording_date_time"] = recording_date_time
+            yield record

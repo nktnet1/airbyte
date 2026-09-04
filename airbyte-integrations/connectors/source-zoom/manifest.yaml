@@ -441,8 +441,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -1291,8 +1290,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -1627,8 +1625,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -1977,8 +1974,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -2260,8 +2256,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -2751,8 +2746,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -3380,8 +3374,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -3677,8 +3670,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -4035,8 +4027,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -4381,8 +4372,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -4739,8 +4729,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -5019,8 +5008,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -5313,8 +5301,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -5582,8 +5569,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -5846,8 +5832,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -6178,8 +6163,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -6485,8 +6469,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -6827,8 +6810,7 @@ definitions:
                           client_id: "{{ config['client_id'] }}"
                           account_id: "{{ config['account_id'] }}"
                           client_secret: "{{ config['client_secret'] }}"
-                          authorization_endpoint: "{{ config['authorization_endpoint']
-                            }}"
+                          authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                           grant_type: "account_credentials"
                       paginator:
                         type: DefaultPaginator
@@ -7266,8 +7248,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -8143,8 +8124,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -8506,8 +8486,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -8883,8 +8862,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -9192,8 +9170,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -9513,8 +9490,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -10169,8 +10145,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -10494,8 +10469,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -10880,8 +10854,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -11254,8 +11227,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -11639,8 +11611,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -11946,8 +11917,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -12267,8 +12237,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -12564,8 +12533,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -12854,8 +12822,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -13213,8 +13180,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -13548,8 +13514,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -13918,8 +13883,7 @@ streams:
                         client_id: "{{ config['client_id'] }}"
                         account_id: "{{ config['account_id'] }}"
                         client_secret: "{{ config['client_secret'] }}"
-                        authorization_endpoint: "{{ config['authorization_endpoint']
-                          }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                         grant_type: "account_credentials"
                         type: CustomAuthenticator
                       type: HttpRequester
@@ -14669,7 +14633,7 @@ streams:
             type: HttpResponseFilter
         - type: DefaultErrorHandler
       type: CustomRequester
-      class_name: source_declarative_manifest.components.SharedTranscriptCacheRequester
+      class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
       rate_limit_category: LIGHT
       use_cache: true
     record_selector:
@@ -14792,8 +14756,6 @@ streams:
     - "%Y-%m-%d"
     start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
     end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
-    cursor_granularity: "P1D"
-    step: "P30D"
     lookback_window: "P7D"
   transformations:
   - type: AddFields
@@ -14918,37 +14880,8 @@ streams:
   name: "phone_recording_transcripts"
   primary_key: "recording_id"
 - retriever:
-    requester:
-      url_base: "https://api.zoom.us/v2"
-      http_method: "GET"
-      authenticator:
-        class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
-        client_id: "{{ config['client_id'] }}"
-        account_id: "{{ config['account_id'] }}"
-        client_secret: "{{ config['client_secret'] }}"
-        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
-        grant_type: "account_credentials"
-        type: CustomAuthenticator
-      path: "/phone/recording_transcript/download/{{ stream_partition.parent_id }}"
-      error_handler:
-        type: CompositeErrorHandler
-        error_handlers:
-        - type: DefaultErrorHandler
-          response_filters:
-          - predicate: "{{ response.get('code') in [404, 12000, 12001, 12002, 12003] }}"
-            action: IGNORE
-            type: HttpResponseFilter
-        - type: DefaultErrorHandler
-      type: CustomRequester
-      class_name: source_declarative_manifest.components.SharedTranscriptCacheRequester
-      rate_limit_category: LIGHT
-      use_cache: true
-    record_selector:
-      extractor:
-        type: DpathExtractor
-        field_path:
-        - "timeline"
-      type: RecordSelector
+    type: CustomRetriever
+    class_name: source_declarative_manifest.components.TimelineRetriever
     partition_router:
       type: SubstreamPartitionRouter
       parent_stream_configs:
@@ -14965,38 +14898,133 @@ streams:
                 authorization_endpoint: "{{ config['authorization_endpoint'] }}"
                 grant_type: "account_credentials"
                 type: CustomAuthenticator
+              path: "/phone/recording_transcript/download/{{ stream_partition.parent_id }}"
+              error_handler:
+                type: CompositeErrorHandler
+                error_handlers:
+                - type: DefaultErrorHandler
+                  response_filters:
+                  - predicate: "{{ response.get('code') in [404, 12000, 12001, 12002, 12003] }}"
+                    action: IGNORE
+                    type: HttpResponseFilter
+                - type: DefaultErrorHandler
               type: CustomRequester
               class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
-              rate_limit_category: MEDIUM
-              path: "/phone/recordings"
-            paginator:
-              type: DefaultPaginator
-              pagination_strategy:
-                type: "CursorPagination"
-                cursor_value: "{{ response.next_page_token }}"
-                stop_condition: "{{ response.next_page_token == '' }}"
-                page_size: 300
-              page_size_option:
-                field_name: "page_size"
-                inject_into: "request_parameter"
-                type: RequestOption
-              page_token_option:
-                type: RequestOption
-                field_name: "next_page_token"
-                inject_into: "request_parameter"
+              rate_limit_category: LIGHT
+              use_cache: true
             record_selector:
               extractor:
                 type: DpathExtractor
-                field_path:
-                - "recordings"
-              record_filter:
-                type: RecordFilter
-                condition: "{{ record.get('transcript_download_url') != None and record.get('transcript_download_url') != '' }}"
+                field_path: []
               type: RecordSelector
+            partition_router:
+              type: SubstreamPartitionRouter
+              parent_stream_configs:
+              - stream:
+                  retriever:
+                    requester:
+                      url_base: "https://api.zoom.us/v2"
+                      http_method: "GET"
+                      authenticator:
+                        class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+                        client_id: "{{ config['client_id'] }}"
+                        account_id: "{{ config['account_id'] }}"
+                        client_secret: "{{ config['client_secret'] }}"
+                        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+                        grant_type: "account_credentials"
+                        type: CustomAuthenticator
+                      type: CustomRequester
+                      class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
+                      rate_limit_category: MEDIUM
+                      path: "/phone/recordings"
+                    paginator:
+                      type: DefaultPaginator
+                      pagination_strategy:
+                        type: "CursorPagination"
+                        cursor_value: "{{ response.next_page_token }}"
+                        stop_condition: "{{ response.next_page_token == '' }}"
+                        page_size: 300
+                      page_size_option:
+                        field_name: "page_size"
+                        inject_into: "request_parameter"
+                        type: RequestOption
+                      page_token_option:
+                        type: RequestOption
+                        field_name: "next_page_token"
+                        inject_into: "request_parameter"
+                    record_selector:
+                      extractor:
+                        type: DpathExtractor
+                        field_path:
+                        - "recordings"
+                      record_filter:
+                        type: RecordFilter
+                        condition: "{{ record.get('transcript_download_url') != None and record.get('transcript_download_url') != '' }}"
+                      type: RecordSelector
+                    type: SimpleRetriever
+                  incremental_sync:
+                    type: DatetimeBasedCursor
+                    cursor_field: "date_time"
+                    datetime_format: "%Y-%m-%d"
+                    cursor_datetime_formats:
+                    - "%Y-%m-%dT%H:%M:%SZ"
+                    - "%Y-%m-%dT%H:%M:%S.%fZ"
+                    - "%Y-%m-%d"
+                    start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+                    end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
+                    cursor_granularity: "P1D"
+                    step: "P30D"
+                    lookback_window: "P7D"
+                    start_time_option:
+                      type: RequestOption
+                      field_name: "from"
+                      inject_into: "request_parameter"
+                    end_time_option:
+                      type: RequestOption
+                      field_name: "to"
+                      inject_into: "request_parameter"
+                  schema_loader:
+                    type: InlineSchemaLoader
+                    schema:
+                      $schema: http://json-schema.org/draft-07/schema#
+                      type: object
+                      additionalProperties: true
+                      properties:
+                        id:
+                          type:
+                          - 'null'
+                          - string
+                        call_id:
+                          type:
+                          - 'null'
+                          - string
+                        call_log_id:
+                          type:
+                          - 'null'
+                          - string
+                        date_time:
+                          type:
+                          - 'null'
+                          - string
+                        transcript_download_url:
+                          type:
+                          - 'null'
+                          - string
+                  type: DeclarativeStream
+                  name: "phone_recordings"
+                  primary_key: "id"
+                parent_key: "id"
+                partition_field: "parent_id"
+                incremental_dependency: true
+                extra_fields:
+                - - "call_id"
+                - - "call_log_id"
+                - - "date_time"
+                type: ParentStreamConfig
             type: SimpleRetriever
           incremental_sync:
             type: DatetimeBasedCursor
-            cursor_field: "date_time"
+            cursor_field: "recording_date_time"
             datetime_format: "%Y-%m-%d"
             cursor_datetime_formats:
             - "%Y-%m-%dT%H:%M:%SZ"
@@ -15004,17 +15032,26 @@ streams:
             - "%Y-%m-%d"
             start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
             end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
-            cursor_granularity: "P1D"
-            step: "P30D"
             lookback_window: "P7D"
-            start_time_option:
-              type: RequestOption
-              field_name: "from"
-              inject_into: "request_parameter"
-            end_time_option:
-              type: RequestOption
-              field_name: "to"
-              inject_into: "request_parameter"
+          transformations:
+          - type: AddFields
+            fields:
+            - path:
+              - "recording_id"
+              value: "{{ stream_partition.parent_id }}"
+              type: AddedFieldDefinition
+            - path:
+              - "call_id"
+              value: "{{ stream_slice.extra_fields['call_id'] }}"
+              type: AddedFieldDefinition
+            - path:
+              - "call_log_id"
+              value: "{{ stream_slice.extra_fields['call_log_id'] }}"
+              type: AddedFieldDefinition
+            - path:
+              - "recording_date_time"
+              value: "{{ stream_slice.extra_fields['date_time'] }}"
+              type: AddedFieldDefinition
           schema_loader:
             type: InlineSchemaLoader
             schema:
@@ -15022,7 +15059,7 @@ streams:
               type: object
               additionalProperties: true
               properties:
-                id:
+                recording_id:
                   type:
                   - 'null'
                   - string
@@ -15034,26 +15071,99 @@ streams:
                   type:
                   - 'null'
                   - string
-                date_time:
+                recording_date_time:
                   type:
                   - 'null'
                   - string
-                transcript_download_url:
+                type:
                   type:
                   - 'null'
                   - string
+                ver:
+                  type:
+                  - 'null'
+                  - string
+                meeting_id:
+                  type:
+                  - 'null'
+                  - string
+                account_id:
+                  type:
+                  - 'null'
+                  - string
+                host_id:
+                  type:
+                  - 'null'
+                  - string
+                recording_start:
+                  type:
+                  - 'null'
+                  - string
+                recording_end:
+                  type:
+                  - 'null'
+                  - string
+                timeline:
+                  type:
+                  - 'null'
+                  - array
+                  items:
+                    type: object
+                    additionalProperties: true
+                    properties:
+                      text:
+                        type:
+                        - 'null'
+                        - string
+                      raw_text:
+                        type:
+                        - 'null'
+                        - string
+                      ts:
+                        type:
+                        - 'null'
+                        - string
+                        - number
+                      end_ts:
+                        type:
+                        - 'null'
+                        - string
+                        - number
+                      userId:
+                        type:
+                        - 'null'
+                        - string
+                      users:
+                        type:
+                        - 'null'
+                        - array
+                        items:
+                          type: object
+                          additionalProperties: true
+                      userIds:
+                        type:
+                        - 'null'
+                        - array
+                        items:
+                          type:
+                          - 'null'
+                          - string
+                      channelMark:
+                        type:
+                        - 'null'
+                        - integer
           type: DeclarativeStream
-          name: "phone_recordings"
-          primary_key: "id"
-        parent_key: "id"
-        partition_field: "parent_id"
+          name: "phone_recording_transcripts"
+          primary_key: "recording_id"
+        parent_key: recording_id
+        partition_field: parent_id
         incremental_dependency: true
         extra_fields:
-        - - "call_id"
-        - - "call_log_id"
-        - - "date_time"
+        - - timeline
+        - - call_id
+        - - call_log_id
+        - - recording_date_time
         type: ParentStreamConfig
-    type: SimpleRetriever
   incremental_sync:
     type: DatetimeBasedCursor
     cursor_field: "recording_date_time"
@@ -15064,32 +15174,7 @@ streams:
     - "%Y-%m-%d"
     start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
     end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
-    cursor_granularity: "P1D"
-    step: "P30D"
     lookback_window: "P7D"
-  transformations:
-  - type: AddFields
-    fields:
-    - path:
-      - "segment_id"
-      value: "{{ stream_partition.parent_id }}-{{ record.get('ts', '') }}-{{ record.get('end_ts', '') }}-{{ record.get('userId', '') }}"
-      type: AddedFieldDefinition
-    - path:
-      - "recording_id"
-      value: "{{ stream_partition.parent_id }}"
-      type: AddedFieldDefinition
-    - path:
-      - "call_id"
-      value: "{{ stream_slice.extra_fields['call_id'] }}"
-      type: AddedFieldDefinition
-    - path:
-      - "call_log_id"
-      value: "{{ stream_slice.extra_fields['call_log_id'] }}"
-      type: AddedFieldDefinition
-    - path:
-      - "recording_date_time"
-      value: "{{ stream_slice.extra_fields['date_time'] }}"
-      type: AddedFieldDefinition
   schema_loader:
     type: InlineSchemaLoader
     schema:
@@ -15097,7 +15182,7 @@ streams:
       type: object
       additionalProperties: true
       properties:
-        segment_id:
+        timeline_id:
           type:
           - 'null'
           - string
@@ -15171,8 +15256,8 @@ streams:
             type: object
             additionalProperties: true
   type: DeclarativeStream
-  name: "phone_recording_transcript_segments"
-  primary_key: "segment_id"
+  name: "phone_recording_transcript_timeline"
+  primary_key: "timeline_id"
 api_budget:
   type: HTTPAPIBudget
   policies:
@@ -15227,18 +15312,15 @@ spec:
       account_id:
         type: string
         order: 0
-        description: 'The account ID for your Zoom account. You can find this in the
-          Zoom Marketplace under the "Manage" tab for your app.'
+        description: 'The account ID for your Zoom account. You can find this in the Zoom Marketplace under the "Manage" tab for your app.'
       client_id:
         type: string
         order: 1
-        description: 'The client ID for your Zoom app. You can find this in the Zoom
-          Marketplace under the "Manage" tab for your app.'
+        description: 'The client ID for your Zoom app. You can find this in the Zoom Marketplace under the "Manage" tab for your app.'
       client_secret:
         type: string
         order: 2
-        description: 'The client secret for your Zoom app. You can find this in the
-          Zoom Marketplace under the "Manage" tab for your app.'
+        description: 'The client secret for your Zoom app. You can find this in the Zoom Marketplace under the "Manage" tab for your app.'
         airbyte_secret: true
       authorization_endpoint:
         type: string
