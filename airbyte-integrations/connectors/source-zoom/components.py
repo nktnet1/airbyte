@@ -7,7 +7,7 @@ import re
 import time
 from calendar import monthrange
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Union
 from urllib.parse import urlsplit
@@ -139,7 +139,10 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         return date(year, month, day)
 
     def _check_history_limit(self) -> None:
-        if self._history_limit_checked or self.history_limit_months is None:
+        if (
+            self._history_limit_checked
+            or self.history_limit_months is None
+        ):
             return
 
         self._history_limit_checked = True
@@ -152,7 +155,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         except (TypeError, ValueError):
             return
 
-        earliest_start = self._months_ago(self.history_limit_months)
+        earliest_start = self._months_ago(self.history_limit_months) + timedelta(days=1)
         if requested_start < earliest_start:
             self.logger.warning(
                 "Zoom API notice "
