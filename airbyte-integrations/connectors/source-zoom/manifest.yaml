@@ -14466,6 +14466,7 @@ streams:
       type: CustomRequester
       class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
       rate_limit_category: MEDIUM
+      use_cache: true
       path: "/phone/recordings"
     paginator:
       type: DefaultPaginator
@@ -14675,6 +14676,7 @@ streams:
               type: CustomRequester
               class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
               rate_limit_category: MEDIUM
+              use_cache: true
               path: "/phone/recordings"
             paginator:
               type: DefaultPaginator
