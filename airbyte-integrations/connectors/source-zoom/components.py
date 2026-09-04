@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from importlib.metadata import PackageNotFoundError, version as package_version
-from threading import Lock, Thread
+from threading import Lock, Thread, current_thread
 from typing import Any, Callable, ClassVar, Mapping, Optional, Union
 from urllib.parse import urlsplit
 
@@ -106,6 +106,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
 
     rate_limit_category: str = "UNKNOWN"
     history_limit_months: Optional[int] = None
+    requester_role: str = "default"
     _summary_every: ClassVar[int] = 100
     _periodic_summary_interval_seconds: ClassVar[int] = 300
     _periodic_summary_idle_grace_intervals: ClassVar[int] = 12
@@ -118,7 +119,10 @@ class ZoomPhoneLoggingRequester(HttpRequester):
     _history_limit_checked: bool = field(default=False, init=False, repr=False)
     _periodic_logger_started: bool = field(default=False, init=False, repr=False)
     _periodic_logger_lock: Lock = field(default_factory=Lock, init=False, repr=False)
-    _active_request_count: int = field(default=0, init=False, repr=False)
+    _metrics_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _active_http_request_count: int = field(default=0, init=False, repr=False)
+    _peak_http_request_count: int = field(default=0, init=False, repr=False)
+    _http_thread_names: set[str] = field(default_factory=set, init=False, repr=False)
     _last_activity_monotonic: float = field(default_factory=time.monotonic, init=False, repr=False)
 
     def __post_init__(self, parameters: Mapping[str, Any]) -> None:
@@ -155,12 +159,18 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             session.settings.match_headers = False
             cache_match_headers = str(session.settings.match_headers).lower()
 
+        cache_file = (
+            os.path.join(cache_path, f"{self.name}.sqlite") if cache_path else "none"
+        )
+        configured_workers = self.config.get("num_workers", 20)
         self.logger.info(
             "Zoom API requester "
             f"stream={self.name} "
+            f"role={self.requester_role} "
+            f"configured_workers={configured_workers} "
             f"cache_enabled={str(bool(self.use_cache)).lower()} "
             f"cache_session={session_name} "
-            f"cache_path={cache_path or 'none'} "
+            f"cache_file={cache_file} "
             f"cache_match_headers={cache_match_headers} "
             f"periodic_summary_interval_seconds={self._periodic_summary_interval_seconds}"
         )
@@ -223,25 +233,38 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             )
 
     def _log_summary(self, periodic: bool = False) -> None:
-        request_count = self._request_count
+        with self._metrics_lock:
+            request_count = self._request_count
+            cache_hit_count = self._cache_hit_count
+            total_duration_ms = self._total_duration_ms
+            active_http_requests = self._active_http_request_count
+            peak_http_requests = self._peak_http_request_count
+            http_threads_seen = len(self._http_thread_names)
+            last_activity_monotonic = self._last_activity_monotonic
+
         average_duration_ms = (
-            round(self._total_duration_ms / request_count) if request_count else 0
+            round(total_duration_ms / request_count) if request_count else 0
         )
         cache_hit_rate = (
-            (self._cache_hit_count / request_count) * 100 if request_count else 0.0
+            (cache_hit_count / request_count) * 100 if request_count else 0.0
         )
-        seconds_since_activity = max(0, round(time.monotonic() - self._last_activity_monotonic))
+        seconds_since_activity = max(0, round(time.monotonic() - last_activity_monotonic))
+        configured_workers = self.config.get("num_workers", 20)
 
         fields = [
             "Zoom API periodic summary" if periodic else "Zoom API summary",
             f"stream={self.name}",
+            f"role={self.requester_role}",
             f"periodic={str(periodic).lower()}",
             f"requests={request_count}",
-            f"active_requests={self._active_request_count}",
+            f"configured_workers={configured_workers}",
+            f"active_http_requests={active_http_requests}",
+            f"peak_http_requests={peak_http_requests}",
+            f"http_threads_seen={http_threads_seen}",
             f"seconds_since_activity={seconds_since_activity}",
             f"avg_duration_ms={average_duration_ms}",
             f"cache_enabled={str(bool(self.use_cache)).lower()}",
-            f"cache_hits={self._cache_hit_count}",
+            f"cache_hits={cache_hit_count}",
             f"cache_hit_rate={cache_hit_rate:.1f}%",
         ]
 
@@ -256,15 +279,20 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         while True:
             time.sleep(self._periodic_summary_interval_seconds)
 
-            if self._request_count == 0 and self._active_request_count == 0:
+            with self._metrics_lock:
+                request_count = self._request_count
+                active_http_requests = self._active_http_request_count
+                last_activity_monotonic = self._last_activity_monotonic
+
+            if request_count == 0 and active_http_requests == 0:
                 continue
 
-            seconds_since_activity = time.monotonic() - self._last_activity_monotonic
+            seconds_since_activity = time.monotonic() - last_activity_monotonic
             idle_grace_seconds = (
                 self._periodic_summary_interval_seconds
                 * self._periodic_summary_idle_grace_intervals
             )
-            if self._active_request_count == 0 and seconds_since_activity > idle_grace_seconds:
+            if active_http_requests == 0 and seconds_since_activity > idle_grace_seconds:
                 continue
 
             self._log_summary(periodic=True)
@@ -298,8 +326,14 @@ class ZoomPhoneLoggingRequester(HttpRequester):
     ) -> Optional[requests.Response]:
         self._check_history_limit()
         self._ensure_periodic_logger_started()
-        self._active_request_count += 1
-        self._last_activity_monotonic = time.monotonic()
+        thread_name = current_thread().name
+        with self._metrics_lock:
+            self._active_http_request_count += 1
+            self._peak_http_request_count = max(
+                self._peak_http_request_count, self._active_http_request_count
+            )
+            self._http_thread_names.add(thread_name)
+            self._last_activity_monotonic = time.monotonic()
 
         url = self._get_url(
             path=path,
@@ -341,8 +375,11 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             )
             raise
         finally:
-            self._active_request_count = max(0, self._active_request_count - 1)
-            self._last_activity_monotonic = time.monotonic()
+            with self._metrics_lock:
+                self._active_http_request_count = max(
+                    0, self._active_http_request_count - 1
+                )
+                self._last_activity_monotonic = time.monotonic()
 
         duration_ms = round((time.monotonic() - started) * 1000)
 
@@ -360,10 +397,12 @@ class ZoomPhoneLoggingRequester(HttpRequester):
 
         headers = response.headers
         from_cache = bool(getattr(response, "from_cache", False))
-        self._request_count += 1
-        self._total_duration_ms += duration_ms
-        if from_cache:
-            self._cache_hit_count += 1
+        with self._metrics_lock:
+            self._request_count += 1
+            self._total_duration_ms += duration_ms
+            if from_cache:
+                self._cache_hit_count += 1
+            request_count = self._request_count
 
         fields = [
             "Zoom API",
@@ -407,7 +446,34 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         else:
             self.logger.debug(message)
 
-        if self._request_count % self._summary_every == 0:
+        if request_count % self._summary_every == 0:
             self._log_summary()
 
         return response
+
+
+@dataclass
+class ZoomPhoneCachedRequester(ZoomPhoneLoggingRequester):
+    """
+    Zoom Phone requester that always enables Airbyte's request cache.
+
+    This class exists because CustomRequester manifests can instantiate the base
+    requester with use_cache=False even when the YAML contains use_cache: true.
+    For /phone/recordings we need caching to be guaranteed before HttpRequester
+    constructs HttpClient, otherwise the transcript parent performs another full
+    Zoom API traversal.
+    """
+
+    use_cache: bool = True
+
+    def __post_init__(self, parameters: Mapping[str, Any]) -> None:
+        # Force caching before HttpRequester.__post_init__ creates HttpClient.
+        self.use_cache = True
+        super().__post_init__(parameters)
+
+        session_name = type(self._http_client._session).__name__
+        if session_name != "CachedLimiterSession":
+            raise RuntimeError(
+                "Zoom Phone cache initialization failed: expected "
+                f"CachedLimiterSession for stream={self.name}, got {session_name}"
+            )

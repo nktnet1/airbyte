@@ -14464,8 +14464,9 @@ streams:
         grant_type: "account_credentials"
         type: CustomAuthenticator
       type: CustomRequester
-      class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
+      class_name: source_declarative_manifest.components.ZoomPhoneCachedRequester
       rate_limit_category: MEDIUM
+      requester_role: selected_stream
       use_cache: true
       path: "/phone/recordings"
     paginator:
@@ -14649,6 +14650,7 @@ streams:
       type: CustomRequester
       class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
       rate_limit_category: LIGHT
+      requester_role: transcript
     record_selector:
       extractor:
         type: DpathExtractor
@@ -14674,8 +14676,9 @@ streams:
                 grant_type: "account_credentials"
                 type: CustomAuthenticator
               type: CustomRequester
-              class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
+              class_name: source_declarative_manifest.components.ZoomPhoneCachedRequester
               rate_limit_category: MEDIUM
+              requester_role: transcript_parent
               use_cache: true
               path: "/phone/recordings"
             paginator:
