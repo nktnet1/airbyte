@@ -107,6 +107,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
     rate_limit_category: str = "UNKNOWN"
     history_limit_months: Optional[int] = None
     requester_role: str = "default"
+    cache_name: Optional[str] = None
     _summary_every: ClassVar[int] = 500
     _periodic_summary_interval_seconds: ClassVar[int] = 300
     _periodic_summary_idle_grace_intervals: ClassVar[int] = 12
@@ -135,7 +136,16 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             os.makedirs(cache_path, exist_ok=True)
             os.environ.setdefault("REQUEST_CACHE_PATH", cache_path)
 
-        super().__post_init__(parameters)
+        # HttpRequester uses `name` only as the Airbyte request-cache namespace.
+        # Keep the real stream name for our logs, while optionally sharing one
+        # Airbyte-managed cache between related requesters.
+        display_name = self.name
+        cache_identity = self.cache_name or display_name
+        self.name = cache_identity
+        try:
+            super().__post_init__(parameters)
+        finally:
+            self.name = display_name
 
         if not ZoomPhoneLoggingRequester._runtime_version_logged:
             with ZoomPhoneLoggingRequester._runtime_version_lock:
@@ -179,8 +189,9 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             session.settings.match_headers = False
             cache_match_headers = str(session.settings.match_headers).lower()
 
+        cache_identity = self.cache_name or self.name
         cache_file = (
-            os.path.join(cache_path, f"{self.name}.sqlite") if cache_path else "none"
+            os.path.join(cache_path, f"{cache_identity}.sqlite") if cache_path else "none"
         )
         if self.use_cache:
             self.logger.info(
@@ -247,6 +258,18 @@ class ZoomPhoneLoggingRequester(HttpRequester):
                 f"effective_start_date={earliest_start.isoformat()}"
             )
 
+    def _cache_metrics_enabled(self) -> bool:
+        return self.use_cache
+
+    def _record_request_metrics(self, duration_ms: int, from_cache: bool) -> int:
+        with self._metrics_lock:
+            self._request_count += 1
+            self._total_duration_ms += duration_ms
+            if from_cache:
+                self._cache_hit_count += 1
+            self._last_activity_monotonic = time.monotonic()
+            return self._request_count
+
     def _log_summary(self, periodic: bool = False) -> None:
         with self._metrics_lock:
             request_count = self._request_count
@@ -274,7 +297,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             )
             fields.append(f"idle_s={seconds_since_activity}")
 
-        if self.use_cache:
+        if self._cache_metrics_enabled():
             cache_hit_rate = (
                 (cache_hit_count / request_count) * 100 if request_count else 0.0
             )
@@ -402,12 +425,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
 
         headers = response.headers
         from_cache = bool(getattr(response, "from_cache", False))
-        with self._metrics_lock:
-            self._request_count += 1
-            self._total_duration_ms += duration_ms
-            if from_cache:
-                self._cache_hit_count += 1
-            request_count = self._request_count
+        request_count = self._record_request_metrics(duration_ms, from_cache)
 
         fields = [
             f"[{self.name}]",
@@ -418,7 +436,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             f"duration_ms={duration_ms}",
         ]
 
-        if self.use_cache:
+        if self._cache_metrics_enabled():
             fields.append(f"cache_hit={from_cache}")
 
         if not from_cache:

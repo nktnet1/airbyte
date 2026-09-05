@@ -7019,6 +7019,245 @@ definitions:
             type:
             - 'null'
             - string
+  phone_transcript_requester:
+    url_base: "https://api.zoom.us/v2"
+    http_method: "GET"
+    authenticator:
+      class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+      client_id: "{{ config['client_id'] }}"
+      account_id: "{{ config['account_id'] }}"
+      client_secret: "{{ config['client_secret'] }}"
+      authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+      grant_type: "account_credentials"
+      type: CustomAuthenticator
+    path: "/phone/recording_transcript/download/{{ stream_partition.parent_id }}"
+    error_handler:
+      type: CompositeErrorHandler
+      error_handlers:
+      - type: DefaultErrorHandler
+        response_filters:
+        - predicate: "{{ response.get('code') in [404, 12000, 12001, 12002, 12003] }}"
+          action: IGNORE
+          type: HttpResponseFilter
+      - type: DefaultErrorHandler
+    type: CustomRequester
+    class_name: source_declarative_manifest.components.ZoomPhoneCachedRequester
+    rate_limit_category: LIGHT
+    requester_role: transcript_download
+    use_cache: true
+    cache_name: phone_transcript_download
+  phone_transcript_parent_router:
+    type: SubstreamPartitionRouter
+    parent_stream_configs:
+    - stream:
+        retriever:
+          requester:
+            url_base: "https://api.zoom.us/v2"
+            http_method: "GET"
+            authenticator:
+              class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
+              client_id: "{{ config['client_id'] }}"
+              account_id: "{{ config['account_id'] }}"
+              client_secret: "{{ config['client_secret'] }}"
+              authorization_endpoint: "{{ config['authorization_endpoint'] }}"
+              grant_type: "account_credentials"
+              type: CustomAuthenticator
+            type: CustomRequester
+            class_name: source_declarative_manifest.components.ZoomPhoneCachedRequester
+            rate_limit_category: MEDIUM
+            requester_role: transcript_parent
+            use_cache: true
+            path: "/phone/recordings"
+          paginator:
+            type: DefaultPaginator
+            pagination_strategy:
+              type: "CursorPagination"
+              cursor_value: "{{ response.next_page_token }}"
+              stop_condition: "{{ response.next_page_token == '' }}"
+              page_size: 300
+            page_size_option:
+              field_name: page_size
+              inject_into: "request_parameter"
+              type: RequestOption
+            page_token_option:
+              type: RequestOption
+              field_name: next_page_token
+              inject_into: "request_parameter"
+          record_selector:
+            extractor:
+              type: DpathExtractor
+              field_path:
+              - recordings
+            record_filter:
+              type: RecordFilter
+              condition: "{{ (record.get('transcript_download_url') != None and record.get('transcript_download_url') != '') and (record.get('id') not in [None, '']) }}"
+            type: RecordSelector
+          type: SimpleRetriever
+        incremental_sync:
+          type: DatetimeBasedCursor
+          cursor_field: date_time
+          datetime_format: "%Y-%m-%d"
+          cursor_datetime_formats:
+          - "%Y-%m-%dT%H:%M:%SZ"
+          - "%Y-%m-%dT%H:%M:%S.%fZ"
+          - "%Y-%m-%d"
+          start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+          end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
+          cursor_granularity: "P1D"
+          step: "P1D"
+          lookback_window: "P7D"
+          start_time_option:
+            type: RequestOption
+            field_name: from
+            inject_into: "request_parameter"
+          end_time_option:
+            type: RequestOption
+            field_name: to
+            inject_into: "request_parameter"
+        schema_loader:
+          type: InlineSchemaLoader
+          schema:
+            $schema: http://json-schema.org/draft-07/schema#
+            type: object
+            additionalProperties: true
+            properties:
+              id:
+                type: string
+              call_id:
+                type:
+                - 'null'
+                - string
+              call_log_id:
+                type:
+                - 'null'
+                - string
+              date_time:
+                type:
+                - 'null'
+                - string
+              transcript_download_url:
+                type:
+                - 'null'
+                - string
+            required:
+            - id
+        type: DeclarativeStream
+        name: "phone_recordings"
+        primary_key: id
+      parent_key: id
+      partition_field: parent_id
+      incremental_dependency: true
+      extra_fields:
+      - - call_id
+      - - call_log_id
+      - - date_time
+      type: ParentStreamConfig
+  phone_transcript_incremental_sync:
+    type: DatetimeBasedCursor
+    cursor_field: recording_date_time
+    datetime_format: "%Y-%m-%d"
+    cursor_datetime_formats:
+    - "%Y-%m-%dT%H:%M:%SZ"
+    - "%Y-%m-%dT%H:%M:%S.%fZ"
+    - "%Y-%m-%d"
+    start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+    end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
+    lookback_window: "P7D"
+  phone_recording_transcripts_stream:
+    retriever:
+      requester:
+        $ref: '#/definitions/phone_transcript_requester'
+      record_selector:
+        extractor:
+          type: DpathExtractor
+          field_path: []
+        type: RecordSelector
+        record_filter:
+          type: RecordFilter
+          condition: "{{ (record.get('recording_id') not in [None, '']) or (record.get('meeting_id') not in [None, '']) }}"
+      partition_router:
+        $ref: '#/definitions/phone_transcript_parent_router'
+      type: SimpleRetriever
+    incremental_sync:
+      $ref: '#/definitions/phone_transcript_incremental_sync'
+    transformations:
+    - type: AddFields
+      fields:
+      - path:
+        - recording_id
+        value: "{{ record.get('recording_id') or record.get('meeting_id') or stream_partition.parent_id }}"
+        type: AddedFieldDefinition
+      - path:
+        - call_id
+        value: "{{ stream_slice.extra_fields['call_id'] }}"
+        type: AddedFieldDefinition
+      - path:
+        - call_log_id
+        value: "{{ stream_slice.extra_fields['call_log_id'] }}"
+        type: AddedFieldDefinition
+      - path:
+        - recording_date_time
+        value: "{{ stream_slice.extra_fields['date_time'] }}"
+        type: AddedFieldDefinition
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        $schema: http://json-schema.org/draft-07/schema#
+        type: object
+        additionalProperties: true
+        properties:
+          recording_id:
+            type: string
+          call_id:
+            type:
+            - 'null'
+            - string
+          call_log_id:
+            type:
+            - 'null'
+            - string
+          recording_date_time:
+            type:
+            - 'null'
+            - string
+          type:
+            type:
+            - 'null'
+            - string
+          ver:
+            type: integer
+          meeting_id:
+            type:
+            - 'null'
+            - string
+          account_id:
+            type:
+            - 'null'
+            - string
+          host_id:
+            type:
+            - 'null'
+            - string
+          recording_start:
+            type:
+            - 'null'
+            - string
+          recording_end:
+            type:
+            - 'null'
+            - string
+          timeline:
+            type:
+            - 'null'
+            - array
+            items:
+              type: object
+              additionalProperties: true
+        required:
+        - recording_id
+    type: DeclarativeStream
+    name: "phone_recording_transcripts"
+    primary_key: recording_id
 streams:
 - retriever:
     requester:
@@ -14625,176 +14864,48 @@ streams:
   type: DeclarativeStream
   name: "phone_recordings"
   primary_key: id
+- $ref: '#/definitions/phone_recording_transcripts_stream'
 - retriever:
     requester:
-      url_base: "https://api.zoom.us/v2"
-      http_method: "GET"
-      authenticator:
-        class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
-        client_id: "{{ config['client_id'] }}"
-        account_id: "{{ config['account_id'] }}"
-        client_secret: "{{ config['client_secret'] }}"
-        authorization_endpoint: "{{ config['authorization_endpoint'] }}"
-        grant_type: "account_credentials"
-        type: CustomAuthenticator
-      path: "/phone/recording_transcript/download/{{ stream_partition.parent_id }}"
-      error_handler:
-        type: CompositeErrorHandler
-        error_handlers:
-        - type: DefaultErrorHandler
-          response_filters:
-          - predicate: "{{ response.get('code') in [404, 12000, 12001, 12002, 12003] }}"
-            action: IGNORE
-            type: HttpResponseFilter
-        - type: DefaultErrorHandler
-      type: CustomRequester
-      class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
-      rate_limit_category: LIGHT
-      requester_role: transcript
+      $ref: '#/definitions/phone_transcript_requester'
     record_selector:
       extractor:
         type: DpathExtractor
-        field_path: []
+        field_path:
+        - timeline
       type: RecordSelector
-      record_filter:
-        type: RecordFilter
-        condition: "{{ (record.get('recording_id') not in [None, '']) or (record.get('meeting_id') not in [None, '']) }}"
     partition_router:
       type: SubstreamPartitionRouter
       parent_stream_configs:
       - stream:
-          retriever:
-            requester:
-              url_base: "https://api.zoom.us/v2"
-              http_method: "GET"
-              authenticator:
-                class_name: source_declarative_manifest.components.ServerToServerOauthAuthenticator
-                client_id: "{{ config['client_id'] }}"
-                account_id: "{{ config['account_id'] }}"
-                client_secret: "{{ config['client_secret'] }}"
-                authorization_endpoint: "{{ config['authorization_endpoint'] }}"
-                grant_type: "account_credentials"
-                type: CustomAuthenticator
-              type: CustomRequester
-              class_name: source_declarative_manifest.components.ZoomPhoneCachedRequester
-              rate_limit_category: MEDIUM
-              requester_role: transcript_parent
-              use_cache: true
-              path: "/phone/recordings"
-            paginator:
-              type: DefaultPaginator
-              pagination_strategy:
-                type: "CursorPagination"
-                cursor_value: "{{ response.next_page_token }}"
-                stop_condition: "{{ response.next_page_token == '' }}"
-                page_size: 300
-              page_size_option:
-                field_name: page_size
-                inject_into: "request_parameter"
-                type: RequestOption
-              page_token_option:
-                type: RequestOption
-                field_name: next_page_token
-                inject_into: "request_parameter"
-            record_selector:
-              extractor:
-                type: DpathExtractor
-                field_path:
-                - recordings
-              record_filter:
-                type: RecordFilter
-                condition: "{{ (record.get('transcript_download_url') != None and record.get('transcript_download_url') != '') and (record.get('id') not in [None, '']) }}"
-              type: RecordSelector
-            type: SimpleRetriever
-          incremental_sync:
-            type: DatetimeBasedCursor
-            cursor_field: date_time
-            datetime_format: "%Y-%m-%d"
-            cursor_datetime_formats:
-            - "%Y-%m-%dT%H:%M:%SZ"
-            - "%Y-%m-%dT%H:%M:%S.%fZ"
-            - "%Y-%m-%d"
-            start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
-            end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
-            cursor_granularity: "P1D"
-            step: "P1D"
-            lookback_window: "P7D"
-            start_time_option:
-              type: RequestOption
-              field_name: from
-              inject_into: "request_parameter"
-            end_time_option:
-              type: RequestOption
-              field_name: to
-              inject_into: "request_parameter"
-          schema_loader:
-            type: InlineSchemaLoader
-            schema:
-              $schema: http://json-schema.org/draft-07/schema#
-              type: object
-              additionalProperties: true
-              properties:
-                id:
-                  type: string
-                call_id:
-                  type:
-                  - 'null'
-                  - string
-                call_log_id:
-                  type:
-                  - 'null'
-                  - string
-                date_time:
-                  type:
-                  - 'null'
-                  - string
-                transcript_download_url:
-                  type:
-                  - 'null'
-                  - string
-              required:
-              - id
-          type: DeclarativeStream
-          name: "phone_recordings"
-          primary_key: id
-        parent_key: id
+          $ref: '#/definitions/phone_recording_transcripts_stream'
+        parent_key: recording_id
         partition_field: parent_id
-        incremental_dependency: true
         extra_fields:
         - - call_id
-        - - call_log_id
-        - - date_time
+        - - recording_date_time
         type: ParentStreamConfig
     type: SimpleRetriever
   incremental_sync:
-    type: DatetimeBasedCursor
-    cursor_field: recording_date_time
-    datetime_format: "%Y-%m-%d"
-    cursor_datetime_formats:
-    - "%Y-%m-%dT%H:%M:%SZ"
-    - "%Y-%m-%dT%H:%M:%S.%fZ"
-    - "%Y-%m-%d"
-    start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
-    end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
-    lookback_window: "P7D"
+    $ref: '#/definitions/phone_transcript_incremental_sync'
   transformations:
   - type: AddFields
     fields:
     - path:
+      - timeline_id
+      value: "{{ stream_partition.parent_id ~ '-' ~ record.get('ts', '') ~ '-' ~ record.get('end_ts', '') }}"
+      type: AddedFieldDefinition
+    - path:
       - recording_id
-      value: "{{ record.get('recording_id') or record.get('meeting_id') or stream_partition.parent_id }}"
+      value: '{{ stream_partition.parent_id }}'
       type: AddedFieldDefinition
     - path:
       - call_id
-      value: "{{ stream_slice.extra_fields['call_id'] }}"
-      type: AddedFieldDefinition
-    - path:
-      - call_log_id
-      value: "{{ stream_slice.extra_fields['call_log_id'] }}"
+      value: "{{ stream_slice.extra_fields.get('call_id') }}"
       type: AddedFieldDefinition
     - path:
       - recording_date_time
-      value: "{{ stream_slice.extra_fields['date_time'] }}"
+      value: "{{ stream_slice.extra_fields.get('recording_date_time') }}"
       type: AddedFieldDefinition
   schema_loader:
     type: InlineSchemaLoader
@@ -14803,100 +14914,76 @@ streams:
       type: object
       additionalProperties: true
       properties:
+        timeline_id:
+          type: string
         recording_id:
           type: string
         call_id:
           type:
           - 'null'
           - string
-        call_log_id:
+        text:
           type:
           - 'null'
           - string
-        recording_date_time:
+        raw_text:
           type:
           - 'null'
           - string
-        type:
+        ts:
           type:
           - 'null'
           - string
-        ver:
-          type: integer
-        meeting_id:
+          - number
+        end_ts:
           type:
           - 'null'
           - string
-        account_id:
+          - number
+        language:
           type:
           - 'null'
           - string
-        host_id:
+        userId:
           type:
           - 'null'
           - string
-        recording_start:
+        userIds:
+          type:
+          - 'null'
+          - array
+          items:
+            type:
+            - 'null'
+            - string
+        channelMark:
           type:
           - 'null'
           - string
-        recording_end:
-          type:
-          - 'null'
-          - string
-        timeline:
+        users:
           type:
           - 'null'
           - array
           items:
             type: object
             additionalProperties: true
-            properties:
-              text:
-                type:
-                - 'null'
-                - string
-              raw_text:
-                type:
-                - 'null'
-                - string
-              ts:
-                type:
-                - 'null'
-                - string
-                - number
-              end_ts:
-                type:
-                - 'null'
-                - string
-                - number
-              userId:
-                type:
-                - 'null'
-                - string
-              users:
-                type:
-                - 'null'
-                - array
-                items:
-                  type: object
-                  additionalProperties: true
-              userIds:
-                type:
-                - 'null'
-                - array
-                items:
-                  type:
-                  - 'null'
-                  - string
-              channelMark:
-                type:
-                - 'null'
-                - string
+        word_items:
+          type:
+          - 'null'
+          - array
+          items:
+            type: object
+            additionalProperties: true
+        recording_date_time:
+          type:
+          - 'null'
+          - string
       required:
+      - timeline_id
       - recording_id
   type: DeclarativeStream
-  name: "phone_recording_transcripts"
-  primary_key: recording_id
+  name: phone_recording_transcript_timeline
+  primary_key: timeline_id
 api_budget:
   type: HTTPAPIBudget
   policies:
