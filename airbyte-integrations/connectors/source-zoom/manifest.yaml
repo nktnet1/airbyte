@@ -7067,6 +7067,7 @@ definitions:
             rate_limit_category: MEDIUM
             requester_role: transcript_parent
             use_cache: true
+            cache_name: phone_recordings
             path: "/phone/recordings"
           paginator:
             type: DefaultPaginator
@@ -14365,6 +14366,7 @@ streams:
       type: CustomRequester
       class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
       rate_limit_category: MEDIUM
+      requester_role: selected_stream
       path: "/phone/users"
     paginator:
       type: DefaultPaginator
@@ -14519,6 +14521,7 @@ streams:
       class_name: source_declarative_manifest.components.ZoomPhoneLoggingRequester
       rate_limit_category: HEAVY
       history_limit_months: 6
+      requester_role: selected_stream
       path: "/phone/call_history"
     paginator:
       type: DefaultPaginator
@@ -14620,7 +14623,7 @@ streams:
         duration:
           type:
           - 'null'
-          - number
+          - integer
         recording_status:
           type:
           - 'null'
@@ -14707,6 +14710,7 @@ streams:
       rate_limit_category: MEDIUM
       requester_role: selected_stream
       use_cache: true
+      cache_name: phone_recordings
       path: "/phone/recordings"
     paginator:
       type: DefaultPaginator
@@ -14786,7 +14790,7 @@ streams:
         duration:
           type:
           - 'null'
-          - number
+          - integer
         direction:
           type:
           - 'null'
@@ -14822,7 +14826,7 @@ streams:
         caller_number_type:
           type:
           - 'null'
-          - string
+          - integer
         callee_name:
           type:
           - 'null'
@@ -14834,15 +14838,17 @@ streams:
         callee_number_type:
           type:
           - 'null'
-          - string
+          - integer
         accepted_by:
           type:
           - 'null'
-          - string
+          - object
+          additionalProperties: true
         outgoing_by:
           type:
           - 'null'
-          - string
+          - object
+          additionalProperties: true
         meeting_uuid:
           type:
           - 'null'
@@ -14850,7 +14856,7 @@ streams:
         disclaimer_status:
           type:
           - 'null'
-          - string
+          - integer
         auto_delete_enable:
           type:
           - 'null'
@@ -14858,7 +14864,7 @@ streams:
         auto_delete_policy:
           type:
           - 'null'
-          - object
+          - string
       required:
       - id
   type: DeclarativeStream
@@ -14870,9 +14876,8 @@ streams:
       $ref: '#/definitions/phone_transcript_requester'
     record_selector:
       extractor:
-        type: DpathExtractor
-        field_path:
-        - timeline
+        type: CustomRecordExtractor
+        class_name: source_declarative_manifest.components.TimelineRecordExtractor
       type: RecordSelector
     partition_router:
       $ref: '#/definitions/phone_transcript_parent_router'
@@ -14882,10 +14887,6 @@ streams:
   transformations:
   - type: AddFields
     fields:
-    - path:
-      - timeline_id
-      value: "{{ stream_partition.parent_id ~ '-' ~ record.get('ts', '') ~ '-' ~ record.get('end_ts', '') }}"
-      type: AddedFieldDefinition
     - path:
       - recording_id
       value: '{{ stream_partition.parent_id }}'
@@ -14922,15 +14923,9 @@ streams:
           - 'null'
           - string
         ts:
-          type:
-          - 'null'
-          - string
-          - number
+          type: string
         end_ts:
-          type:
-          - 'null'
-          - string
-          - number
+          type: string
         language:
           type:
           - 'null'
@@ -14972,6 +14967,8 @@ streams:
       required:
       - timeline_id
       - recording_id
+      - ts
+      - end_ts
   type: DeclarativeStream
   name: phone_recording_transcript_timeline
   primary_key: timeline_id

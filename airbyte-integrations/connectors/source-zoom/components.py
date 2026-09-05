@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from importlib.metadata import PackageNotFoundError, version as package_version
 from threading import Lock, Thread
-from typing import Any, Callable, ClassVar, Mapping, Optional, Union
+from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Union
 from urllib.parse import urlsplit
 
 import requests
@@ -20,6 +20,7 @@ from requests import HTTPError
 
 from airbyte_cdk.sources.declarative.auth.declarative_authenticator import NoAuth
 from airbyte_cdk.sources.declarative.interpolation import InterpolatedString
+from airbyte_cdk.sources.declarative.extractors.record_extractor import RecordExtractor
 from airbyte_cdk.sources.declarative.requesters.http_requester import HttpRequester
 from airbyte_cdk.sources.declarative.types import Config
 
@@ -98,6 +99,34 @@ class ServerToServerOauthAuthenticator(NoAuth):
 
 
 @dataclass
+class TimelineRecordExtractor(RecordExtractor):
+    """Expand each transcript timeline item into one record with a stable key."""
+
+    config: Config
+
+    def extract_records(self, response: requests.Response) -> Iterable[Mapping[str, Any]]:
+        try:
+            transcript = response.json()
+        except (TypeError, ValueError):
+            return
+
+        if not isinstance(transcript, Mapping):
+            return
+
+        recording_id = transcript["recording_id"]
+        timeline = transcript.get("timeline")
+        if not isinstance(timeline, list):
+            return
+
+        for item in timeline:
+            record = dict(item)
+            ts = record["ts"]
+            end_ts = record["end_ts"]
+            record["timeline_id"] = f"{recording_id}-{ts}-{end_ts}"
+            yield record
+
+
+@dataclass
 class ZoomPhoneLoggingRequester(HttpRequester):
     """
     Adds compact Zoom Phone request telemetry without logging secrets, bodies,
@@ -134,7 +163,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         if self.use_cache:
             cache_path = os.environ.get("REQUEST_CACHE_PATH") or self._default_cache_directory
             os.makedirs(cache_path, exist_ok=True)
-            os.environ.setdefault("REQUEST_CACHE_PATH", cache_path)
+            os.environ["REQUEST_CACHE_PATH"] = cache_path
 
         # HttpRequester uses `name` only as the Airbyte request-cache namespace.
         # Keep the real stream name for our logs, while optionally sharing one
@@ -194,11 +223,26 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             os.path.join(cache_path, f"{cache_identity}.sqlite") if cache_path else "none"
         )
         if self.use_cache:
+            cache_backend = getattr(session, "cache", None)
+            cache_backend_name = type(cache_backend).__name__ if cache_backend is not None else "none"
+            cache_db_path = str(getattr(cache_backend, "db_path", cache_file))
+            if (
+                session_name != "CachedLimiterSession"
+                or cache_backend_name != "SQLiteCache"
+                or ":memory:" in cache_db_path
+                or "mode=memory" in cache_db_path
+            ):
+                raise RuntimeError(
+                    "Disk cache initialization failed: "
+                    f"stream={self.name} session={session_name} "
+                    f"backend={cache_backend_name} file={cache_db_path}"
+                )
             self.logger.info(
                 f"Cache [{self.name}] "
                 f"role={self.requester_role} "
                 f"session={session_name} "
-                f"file={cache_file} "
+                f"backend={cache_backend_name} "
+                f"file={cache_db_path} "
                 f"match_headers={cache_match_headers}"
             )
 
