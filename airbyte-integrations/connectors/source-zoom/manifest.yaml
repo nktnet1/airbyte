@@ -7044,11 +7044,10 @@ definitions:
     class_name: source_declarative_manifest.components.ZoomPhoneCachedRequester
     rate_limit_category: LIGHT
     requester_role: transcript_download
-    use_cache: true
     cache_name: phone_transcript_download
+    use_cache: true
   phone_transcript_parent_router:
-    type: CustomPartitionRouter
-    class_name: source_declarative_manifest.components.ZoomPhoneSubstreamPartitionRouter
+    type: SubstreamPartitionRouter
     parent_stream_configs:
     - stream:
         retriever:
@@ -7067,8 +7066,8 @@ definitions:
             class_name: source_declarative_manifest.components.ZoomPhoneCachedRequester
             rate_limit_category: MEDIUM
             requester_role: transcript_parent
-            use_cache: true
             cache_name: phone_recordings
+            use_cache: true
             path: "/phone/recordings"
           paginator:
             type: DefaultPaginator
@@ -7260,6 +7259,20 @@ definitions:
     type: DeclarativeStream
     name: "phone_recording_transcripts"
     primary_key: recording_id
+  phone_transcript_timeline_parent_router:
+    type: SubstreamPartitionRouter
+    parent_stream_configs:
+    - stream:
+        $ref: '#/definitions/phone_recording_transcripts_stream'
+      parent_key: recording_id
+      partition_field: parent_id
+      extra_fields:
+      - - call_id
+      - - call_log_id
+      - - recording_date_time
+      lazy_read_pointer:
+      - timeline
+      type: ParentStreamConfig
 streams:
 - retriever:
     requester:
@@ -14710,8 +14723,8 @@ streams:
       class_name: source_declarative_manifest.components.ZoomPhoneCachedRequester
       rate_limit_category: MEDIUM
       requester_role: selected_stream
-      use_cache: true
       cache_name: phone_recordings
+      use_cache: true
       path: "/phone/recordings"
     paginator:
       type: DefaultPaginator
@@ -14880,14 +14893,21 @@ streams:
         type: CustomRecordExtractor
         class_name: source_declarative_manifest.components.TimelineRecordExtractor
       type: RecordSelector
+      record_filter:
+        type: RecordFilter
+        condition: "{{ record.get('ts') not in [None, ''] and record.get('end_ts') not in [None, ''] }}"
     partition_router:
-      $ref: '#/definitions/phone_transcript_parent_router'
+      $ref: '#/definitions/phone_transcript_timeline_parent_router'
     type: SimpleRetriever
   incremental_sync:
     $ref: '#/definitions/phone_transcript_incremental_sync'
   transformations:
   - type: AddFields
     fields:
+    - path:
+      - timeline_id
+      value: "{{ stream_partition.parent_id ~ '-' ~ record['ts'] ~ '-' ~ record['end_ts'] }}"
+      type: AddedFieldDefinition
     - path:
       - recording_id
       value: '{{ stream_partition.parent_id }}'
@@ -14897,8 +14917,12 @@ streams:
       value: "{{ stream_slice.extra_fields.get('call_id') }}"
       type: AddedFieldDefinition
     - path:
+      - call_log_id
+      value: "{{ stream_slice.extra_fields.get('call_log_id') }}"
+      type: AddedFieldDefinition
+    - path:
       - recording_date_time
-      value: "{{ stream_slice.extra_fields.get('date_time') }}"
+      value: "{{ stream_slice.extra_fields.get('recording_date_time') }}"
       type: AddedFieldDefinition
   schema_loader:
     type: InlineSchemaLoader
@@ -14912,6 +14936,10 @@ streams:
         recording_id:
           type: string
         call_id:
+          type:
+          - 'null'
+          - string
+        call_log_id:
           type:
           - 'null'
           - string
