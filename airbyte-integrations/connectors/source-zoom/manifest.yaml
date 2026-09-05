@@ -14875,16 +14875,7 @@ streams:
         - timeline
       type: RecordSelector
     partition_router:
-      type: SubstreamPartitionRouter
-      parent_stream_configs:
-      - stream:
-          $ref: '#/definitions/phone_recording_transcripts_stream'
-        parent_key: recording_id
-        partition_field: parent_id
-        extra_fields:
-        - - call_id
-        - - recording_date_time
-        type: ParentStreamConfig
+      $ref: '#/definitions/phone_transcript_parent_router'
     type: SimpleRetriever
   incremental_sync:
     $ref: '#/definitions/phone_transcript_incremental_sync'
@@ -14905,7 +14896,7 @@ streams:
       type: AddedFieldDefinition
     - path:
       - recording_date_time
-      value: "{{ stream_slice.extra_fields.get('recording_date_time') }}"
+      value: "{{ stream_slice.extra_fields.get('date_time') }}"
       type: AddedFieldDefinition
   schema_loader:
     type: InlineSchemaLoader
