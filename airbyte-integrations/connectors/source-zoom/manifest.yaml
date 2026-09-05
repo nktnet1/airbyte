@@ -7047,7 +7047,8 @@ definitions:
     use_cache: true
     cache_name: phone_transcript_download
   phone_transcript_parent_router:
-    type: SubstreamPartitionRouter
+    type: CustomPartitionRouter
+    class_name: source_declarative_manifest.components.ZoomPhoneSubstreamPartitionRouter
     parent_stream_configs:
     - stream:
         retriever:
@@ -7147,7 +7148,6 @@ definitions:
         primary_key: id
       parent_key: id
       partition_field: parent_id
-      incremental_dependency: true
       extra_fields:
       - - call_id
       - - call_log_id
@@ -7164,6 +7164,7 @@ definitions:
     start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
     end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
     lookback_window: "P7D"
+    global_substream_cursor: true
   phone_recording_transcripts_stream:
     retriever:
       requester:
