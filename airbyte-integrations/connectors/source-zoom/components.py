@@ -3,6 +3,7 @@
 #
 
 import base64
+import logging
 import re
 import time
 from calendar import monthrange
@@ -20,6 +21,7 @@ from requests import HTTPError
 from airbyte_cdk.sources.declarative.auth.declarative_authenticator import NoAuth
 from airbyte_cdk.sources.declarative.interpolation import InterpolatedString
 from airbyte_cdk.sources.declarative.extractors.record_extractor import RecordExtractor
+from airbyte_cdk.sources.declarative.partition_routers.substream_partition_router import SafeResponse
 from airbyte_cdk.sources.declarative.requesters.http_requester import HttpRequester
 from airbyte_cdk.sources.declarative.types import Config
 
@@ -101,11 +103,58 @@ class ServerToServerOauthAuthenticator(NoAuth):
 
 @dataclass
 class TimelineRecordExtractor(RecordExtractor):
-    """Extract timeline entries from either a transcript response or Airbyte lazy child response."""
+    """Extract timeline entries and report whether Airbyte used lazy, cached HTTP, or network HTTP."""
 
     config: Config
+    _summary_every: ClassVar[int] = 200
+    _logger: ClassVar[logging.Logger] = logging.getLogger("airbyte.phone_recording_transcript_timeline")
+    _path_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _response_count: int = field(default=0, init=False, repr=False)
+    _lazy_count: int = field(default=0, init=False, repr=False)
+    _http_cache_count: int = field(default=0, init=False, repr=False)
+    _http_network_count: int = field(default=0, init=False, repr=False)
+
+    def _record_source_path(self, response: requests.Response) -> None:
+        if isinstance(response, SafeResponse):
+            source_path = "lazy"
+        elif bool(getattr(response, "from_cache", False)):
+            source_path = "http_cache"
+        else:
+            source_path = "http_network"
+
+        summary = None
+        with self._path_lock:
+            self._response_count += 1
+            if source_path == "lazy":
+                self._lazy_count += 1
+            elif source_path == "http_cache":
+                self._http_cache_count += 1
+            else:
+                self._http_network_count += 1
+
+            if self._response_count % self._summary_every == 0:
+                summary = (
+                    self._response_count,
+                    self._lazy_count,
+                    self._http_cache_count,
+                    self._http_network_count,
+                )
+
+        if summary is not None:
+            response_count, lazy_count, http_cache_count, http_network_count = summary
+            lazy_pct = (lazy_count / response_count) * 100
+            self._logger.info(
+                "[phone_recording_transcript_timeline] "
+                f"source_responses={response_count} "
+                f"lazy={lazy_count} "
+                f"http_cache={http_cache_count} "
+                f"http_network={http_network_count} "
+                f"lazy_pct={lazy_pct:.1f}%"
+            )
 
     def extract_records(self, response: requests.Response) -> Iterable[Mapping[str, Any]]:
+        self._record_source_path(response)
+
         try:
             payload = response.json()
         except (TypeError, ValueError):
@@ -455,8 +504,6 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         message = " ".join(fields)
         if response.status_code == HTTPStatus.TOO_MANY_REQUESTS or response.status_code >= 500:
             self.logger.warning(message)
-        else:
-            self.logger.info(message)
 
         if request_count % self._summary_every == 0:
             self._log_summary()
