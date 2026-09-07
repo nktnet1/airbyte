@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 import requests
 from requests import HTTPError
 
+from airbyte_cdk.models import AirbyteLogMessage, AirbyteMessage, Level, Type
 from airbyte_cdk.sources.declarative.auth.declarative_authenticator import NoAuth
 from airbyte_cdk.sources.declarative.interpolation import InterpolatedString
 from airbyte_cdk.sources.declarative.migrations.state_migration import StateMigration
@@ -408,6 +409,33 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             self._last_activity_monotonic = time.monotonic()
             return self._request_count
 
+    def _emit_parent_log(self, level: Level, message: str) -> None:
+        """Emit parent-stream logs through Airbyte's message repository.
+
+        Parent requests run inside concurrent substream partition generation. Using
+        the requester's MessageRepository ensures the log is forwarded through the
+        ConcurrentMessageRepository/main Airbyte output queue instead of relying on
+        ordinary Python logger propagation from that worker path.
+        """
+        self.message_repository.emit_message(
+            AirbyteMessage(
+                type=Type.LOG,
+                log=AirbyteLogMessage(level=level, message=message),
+            )
+        )
+
+    def _emit_info(self, message: str) -> None:
+        if self.requester_role == "transcript_parent":
+            self._emit_parent_log(Level.INFO, message)
+        else:
+            self.logger.info(message)
+
+    def _emit_warning(self, message: str) -> None:
+        if self.requester_role == "transcript_parent":
+            self._emit_parent_log(Level.WARN, message)
+        else:
+            self.logger.warning(message)
+
     def _log_summary(self, periodic: bool = False) -> None:
         with self._metrics_lock:
             request_count = self._request_count
@@ -457,7 +485,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             if last_request_to is not None:
                 fields.append(f"last_to={last_request_to}")
 
-        self.logger.info(" ".join(fields))
+        self._emit_info(" ".join(fields))
 
     def _periodic_summary_loop(self) -> None:
         while True:
@@ -546,7 +574,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
                     fields.append(f"from={request_from}")
                 if request_to is not None:
                     fields.append(f"to={request_to}")
-                self.logger.info(" ".join(fields))
+                self._emit_info(" ".join(fields))
 
         started = time.monotonic()
 
@@ -564,13 +592,13 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             )
         except Exception as exc:
             duration_ms = round((time.monotonic() - started) * 1000)
-            self.logger.warning(
+            self._emit_warning(
                 f"Failed [{self.name}] "
                 f"method={self.get_method().value} "
                 f"endpoint={endpoint} "
                 f"category={self.rate_limit_category} "
                 f"duration_ms={duration_ms} "
-                f"error={type(exc).__name__}",
+                f"error={type(exc).__name__}"
             )
             raise
         finally:
@@ -583,13 +611,13 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         duration_ms = round((time.monotonic() - started) * 1000)
 
         if response is None:
-            self.logger.warning(
+            self._emit_warning(
                 f"Response [{self.name}] "
                 f"method={self.get_method().value} "
                 f"endpoint={endpoint} "
                 f"category={self.rate_limit_category} "
                 f"status=none "
-                f"duration_ms={duration_ms}",
+                f"duration_ms={duration_ms}"
             )
             return response
 
@@ -637,7 +665,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
 
         message = " ".join(fields)
         if response.status_code == HTTPStatus.TOO_MANY_REQUESTS or response.status_code >= 500:
-            self.logger.warning(message)
+            self._emit_warning(message)
 
         if request_count % self._summary_every == 0:
             self._log_summary()
