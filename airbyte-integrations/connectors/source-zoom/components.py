@@ -13,20 +13,17 @@ from http import HTTPStatus
 from importlib.metadata import PackageNotFoundError, version as package_version
 from threading import Lock, Thread
 from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Union
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
-import orjson
 import requests
 from requests import HTTPError
 
-from airbyte_cdk.models import AirbyteLogMessage, AirbyteMessage, AirbyteMessageSerializer, Level, Type
 from airbyte_cdk.sources.declarative.auth.declarative_authenticator import NoAuth
 from airbyte_cdk.sources.declarative.interpolation import InterpolatedString
 from airbyte_cdk.sources.declarative.migrations.state_migration import StateMigration
 from airbyte_cdk.sources.declarative.extractors.record_extractor import RecordExtractor
 from airbyte_cdk.sources.declarative.partition_routers.substream_partition_router import SafeResponse
 from airbyte_cdk.sources.declarative.requesters.http_requester import HttpRequester
-from airbyte_cdk.sources.streams.http import HttpClient
 from airbyte_cdk.sources.declarative.types import Config
 
 
@@ -273,162 +270,6 @@ class TimelineRecordExtractor(RecordExtractor):
                 yield dict(item)
 
 
-class ZoomPhoneObservedHttpClient:
-    """Observe parent HTTP traffic at the actual HttpClient boundary.
-
-    Parent streams can spend a long time traversing empty slices without yielding
-    records.  Logging through the normal stream/message path can therefore leave
-    the Airbyte UI silent.  This wrapper emits compact, valid Airbyte LOG protocol
-    messages directly from the HTTP loop so progress is visible immediately.
-    """
-
-    _protocol_output_lock: ClassVar[Lock] = Lock()
-
-    def __init__(
-        self,
-        delegate: HttpClient,
-        *,
-        display_name: str,
-        requester_role: str,
-        summary_every: int = 200,
-    ) -> None:
-        self._delegate = delegate
-        self._display_name = display_name
-        self._requester_role = requester_role
-        self._summary_every = max(1, int(summary_every))
-        self._metrics_lock = Lock()
-        self._request_count = 0
-        self._cache_hit_count = 0
-        self._total_duration_ms = 0
-        self._start_logged = False
-        self._last_from: Optional[str] = None
-        self._last_to: Optional[str] = None
-        self._last_status: Optional[int] = None
-
-    @classmethod
-    def _emit_airbyte_info(cls, message: str) -> None:
-        airbyte_message = AirbyteMessage(
-            type=Type.LOG,
-            log=AirbyteLogMessage(level=Level.INFO, message=message),
-        )
-        serialized = orjson.dumps(AirbyteMessageSerializer.dump(airbyte_message)).decode("utf-8")
-        # Airbyte's own HttpClient uses direct, flushed protocol output when a
-        # message must escape an HTTP/retry loop immediately. Keep each line
-        # short and serialize writes from our own observer instances.
-        with cls._protocol_output_lock:
-            print(f"{serialized}\n", end="", flush=True)
-
-    @staticmethod
-    def _query_value(url: str, params: Optional[Mapping[str, Any]], key: str) -> Optional[str]:
-        if params and params.get(key) is not None:
-            return str(params[key])
-        values = parse_qs(urlsplit(url).query).get(key)
-        return str(values[0]) if values else None
-
-    def send_request(
-        self,
-        http_method: str,
-        url: str,
-        request_kwargs: Mapping[str, Any],
-        headers: Optional[Mapping[str, str]] = None,
-        params: Optional[Mapping[str, str]] = None,
-        json: Optional[Mapping[str, Any]] = None,
-        data: Optional[Union[str, Mapping[str, Any]]] = None,
-        dedupe_query_params: bool = False,
-        log_formatter: Optional[Callable[[requests.Response], Any]] = None,
-        exit_on_rate_limit: Optional[bool] = False,
-    ) -> tuple[requests.PreparedRequest, requests.Response]:
-        if self._requester_role == "transcript_parent":
-            start_from = self._query_value(url, params, "from")
-            start_to = self._query_value(url, params, "to")
-            should_log_start = False
-            with self._metrics_lock:
-                if not self._start_logged:
-                    self._start_logged = True
-                    should_log_start = True
-            if should_log_start:
-                fields = [
-                    f"[{self._display_name}]",
-                    "role=transcript_parent",
-                    "parent_http=start",
-                ]
-                if start_from is not None:
-                    fields.append(f"from={start_from}")
-                if start_to is not None:
-                    fields.append(f"to={start_to}")
-                self._emit_airbyte_info(" ".join(fields))
-
-        started = time.monotonic()
-        request, response = self._delegate.send_request(
-            http_method=http_method,
-            url=url,
-            request_kwargs=request_kwargs,
-            headers=headers,
-            params=params,
-            json=json,
-            data=data,
-            dedupe_query_params=dedupe_query_params,
-            log_formatter=log_formatter,
-            exit_on_rate_limit=exit_on_rate_limit,
-        )
-
-        if self._requester_role != "transcript_parent":
-            return request, response
-
-        duration_ms = round((time.monotonic() - started) * 1000)
-        from_cache = bool(getattr(response, "from_cache", False))
-        request_from = self._query_value(request.url or url, None, "from")
-        request_to = self._query_value(request.url or url, None, "to")
-        summary = None
-
-        with self._metrics_lock:
-            self._request_count += 1
-            self._total_duration_ms += duration_ms
-            if from_cache:
-                self._cache_hit_count += 1
-            if request_from is not None:
-                self._last_from = request_from
-            if request_to is not None:
-                self._last_to = request_to
-            self._last_status = response.status_code
-
-            count = self._request_count
-            if count == 1 or count % self._summary_every == 0:
-                summary = (
-                    count,
-                    self._cache_hit_count,
-                    self._total_duration_ms,
-                    self._last_from,
-                    self._last_to,
-                    self._last_status,
-                )
-
-        if summary is not None:
-            count, cache_hits, total_ms, last_from, last_to, last_status = summary
-            network_requests = count - cache_hits
-            fields = [
-                f"[{self._display_name}]",
-                "role=transcript_parent",
-                f"parent_http_requests={count}",
-                f"network={network_requests}",
-                f"cache_hits={cache_hits}",
-                f"cache={(cache_hits / count) * 100 if count else 0.0:.1f}%",
-                f"avg_ms={round(total_ms / count) if count else 0}",
-            ]
-            if last_status is not None:
-                fields.append(f"last_status={last_status}")
-            if last_from is not None:
-                fields.append(f"last_from={last_from}")
-            if last_to is not None:
-                fields.append(f"last_to={last_to}")
-            self._emit_airbyte_info(" ".join(fields))
-
-        return request, response
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._delegate, name)
-
-
 @dataclass
 class ZoomPhoneLoggingRequester(HttpRequester):
     """
@@ -456,6 +297,10 @@ class ZoomPhoneLoggingRequester(HttpRequester):
     _metrics_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _active_http_request_count: int = field(default=0, init=False, repr=False)
     _last_activity_monotonic: float = field(default_factory=time.monotonic, init=False, repr=False)
+    _parent_scan_started: bool = field(default=False, init=False, repr=False)
+    _last_request_from: Optional[str] = field(default=None, init=False, repr=False)
+    _last_request_to: Optional[str] = field(default=None, init=False, repr=False)
+    _last_response_status: Optional[int] = field(default=None, init=False, repr=False)
 
     def __post_init__(self, parameters: Mapping[str, Any]) -> None:
         # Let Airbyte own the cache implementation. The optional alias only makes
@@ -466,14 +311,6 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             super().__post_init__(parameters)
         finally:
             self.name = display_name
-
-        if self.requester_role == "transcript_parent":
-            self._http_client = ZoomPhoneObservedHttpClient(
-                self._http_client,
-                display_name=display_name,
-                requester_role=self.requester_role,
-                summary_every=self._summary_every,
-            )
 
         if not ZoomPhoneLoggingRequester._runtime_version_logged:
             with ZoomPhoneLoggingRequester._runtime_version_lock:
@@ -578,6 +415,9 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             total_duration_ms = self._total_duration_ms
             active_http_requests = self._active_http_request_count
             last_activity_monotonic = self._last_activity_monotonic
+            last_request_from = self._last_request_from
+            last_request_to = self._last_request_to
+            last_response_status = self._last_response_status
 
         average_duration_ms = (
             round(total_duration_ms / request_count) if request_count else 0
@@ -608,6 +448,14 @@ class ZoomPhoneLoggingRequester(HttpRequester):
                     f"cache={cache_hit_rate:.1f}%",
                 ]
             )
+
+        if self.requester_role == "transcript_parent":
+            if last_response_status is not None:
+                fields.append(f"last_status={last_response_status}")
+            if last_request_from is not None:
+                fields.append(f"last_from={last_request_from}")
+            if last_request_to is not None:
+                fields.append(f"last_to={last_request_to}")
 
         self.logger.info(" ".join(fields))
 
@@ -679,6 +527,27 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             next_page_token,
             request_params,
         )
+
+        if self.requester_role == "transcript_parent":
+            request_from = params.get("from")
+            request_to = params.get("to")
+            log_parent_start = False
+            with self._metrics_lock:
+                if request_from is not None:
+                    self._last_request_from = str(request_from)
+                if request_to is not None:
+                    self._last_request_to = str(request_to)
+                if not self._parent_scan_started:
+                    self._parent_scan_started = True
+                    log_parent_start = True
+            if log_parent_start:
+                fields = [f"[{self.name}]", "role=transcript_parent", "parent_scan=start"]
+                if request_from is not None:
+                    fields.append(f"from={request_from}")
+                if request_to is not None:
+                    fields.append(f"to={request_to}")
+                self.logger.info(" ".join(fields))
+
         started = time.monotonic()
 
         try:
@@ -727,6 +596,9 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         headers = response.headers
         from_cache = bool(getattr(response, "from_cache", False))
         request_count = self._record_request_metrics(duration_ms, from_cache)
+        if self.requester_role == "transcript_parent":
+            with self._metrics_lock:
+                self._last_response_status = response.status_code
 
         fields = [
             f"[{self.name}]",
@@ -767,7 +639,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         if response.status_code == HTTPStatus.TOO_MANY_REQUESTS or response.status_code >= 500:
             self.logger.warning(message)
 
-        if self.requester_role != "transcript_parent" and request_count % self._summary_every == 0:
+        if request_count % self._summary_every == 0:
             self._log_summary()
 
         return response
