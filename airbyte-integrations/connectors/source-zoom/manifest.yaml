@@ -7198,14 +7198,17 @@ definitions:
       - path:
         - recording_id
         value: "{{ record.get('recording_id') or record.get('meeting_id') or stream_partition.parent_id }}"
+        value_type: string
         type: AddedFieldDefinition
       - path:
         - call_id
         value: "{{ stream_slice.extra_fields['call_id'] }}"
+        value_type: string
         type: AddedFieldDefinition
       - path:
         - call_log_id
         value: "{{ stream_slice.extra_fields['call_log_id'] }}"
+        value_type: string
         type: AddedFieldDefinition
       - path:
         - recording_date_time
@@ -7296,18 +7299,22 @@ definitions:
       - path:
         - timeline_id
         value: "{{ stream_partition.parent_id ~ '-' ~ record['ts'] ~ '-' ~ record['end_ts'] }}"
+        value_type: string
         type: AddedFieldDefinition
       - path:
         - recording_id
         value: '{{ stream_partition.parent_id }}'
+        value_type: string
         type: AddedFieldDefinition
       - path:
         - call_id
         value: "{{ stream_slice.extra_fields.get('call_id') }}"
+        value_type: string
         type: AddedFieldDefinition
       - path:
         - call_log_id
         value: "{{ stream_slice.extra_fields.get('call_log_id') }}"
+        value_type: string
         type: AddedFieldDefinition
       - path:
         - recording_date_time
