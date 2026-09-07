@@ -557,7 +557,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         if self.history_limit_months is None:
             return
 
-        configured_start = self.config.get("phone_start_date")
+        configured_start = self.config.get("phone_initial_start_date")
         if not configured_start:
             return
 
@@ -570,7 +570,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         if requested_start < earliest_start:
             self.logger.warning(
                 f"Notice [{self.name}] "
-                f"requested_phone_start_date={requested_start.isoformat()} "
+                f"requested_phone_initial_start_date={requested_start.isoformat()} "
                 f"exceeds_zoom_history_window={self.history_limit_months}m "
                 f"effective_start_date={earliest_start.isoformat()}"
             )
@@ -613,11 +613,14 @@ class ZoomPhoneCachedRequester(ZoomPhoneLoggingRequester):
 class ZoomPhoneTranscriptRequester(ZoomPhoneLoggingRequester):
     """Cache final Zoom transcript JSON by stable recording ID for this job.
 
-    The transcript endpoint redirects before returning its JSON payload, which
-    makes generic URL-based HTTP caching ineffective across the transcript and
-    timeline streams. This requester stores each final HTTP 200 response in a
-    process-local SQLite file keyed by the parent ``recording_id``. The sibling
-    timeline stream therefore reuses the exact response without calling Zoom.
+    Zoom's ``/phone/recording_transcript/download/{recording_id}`` endpoint
+    responds with HTTP 302 before redirecting to the final HTTP 200 JSON payload.
+    Generic URL-based HTTP caching is therefore unreliable for reuse between the
+    transcript and timeline streams because the redirect/final URL is not the
+    stable recording URL we want to share. This requester stores each final 200
+    JSON payload in an on-disk SQLite cache keyed by the stable parent
+    ``recording_id``. The sibling timeline stream can then reuse the exact
+    response without making the transcript-download request to Zoom again.
     """
 
     use_cache: bool = False
@@ -630,8 +633,10 @@ class ZoomPhoneTranscriptRequester(ZoomPhoneLoggingRequester):
     _first_hit_logged_for_streams: ClassVar[set[str]] = set()
 
     def __post_init__(self, parameters: Mapping[str, Any]) -> None:
-        # Disable the CDK URL cache for this redirecting endpoint. The stable-ID
-        # payload cache below is the source of truth for transcript reuse.
+        # Zoom returns HTTP 302 for the stable transcript-download URL before
+        # redirecting to the final HTTP 200 JSON response. Disable the CDK's
+        # generic URL cache here and use the on-disk recording_id cache below so
+        # transcript and timeline streams reliably reuse the same payload.
         self.use_cache = False
         super().__post_init__(parameters)
         self._ensure_transcript_cache()

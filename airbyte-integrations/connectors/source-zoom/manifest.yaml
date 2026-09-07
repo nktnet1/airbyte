@@ -7107,7 +7107,7 @@ definitions:
           - "%Y-%m-%dT%H:%M:%SZ"
           - "%Y-%m-%dT%H:%M:%S.%fZ"
           - "%Y-%m-%d"
-          start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+          start_datetime: "{{ config.get('phone_initial_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
           end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
           cursor_granularity: "P1D"
           step: "P1D"
@@ -7166,7 +7166,7 @@ definitions:
     - "%Y-%m-%dT%H:%M:%SZ"
     - "%Y-%m-%dT%H:%M:%S.%fZ"
     - "%Y-%m-%d"
-    start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+    start_datetime: "{{ config.get('phone_initial_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
     end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
     lookback_window: "P7D"
     global_substream_cursor: true
@@ -14702,7 +14702,7 @@ streams:
     - "%Y-%m-%dT%H:%M:%SZ"
     - "%Y-%m-%dT%H:%M:%S.%fZ"
     - "%Y-%m-%d"
-    start_datetime: "{{ [config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')), (now_utc() - duration('P6M') + duration('P1D')).strftime('%Y-%m-%d')] | max }}"
+    start_datetime: "{{ [config.get('phone_initial_start_date', day_delta(-30, format='%Y-%m-%d')), (now_utc() - duration('P6M') + duration('P1D')).strftime('%Y-%m-%d')] | max }}"
     end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
     cursor_granularity: "P1D"
     step: "P1D"
@@ -14881,7 +14881,7 @@ streams:
     - "%Y-%m-%dT%H:%M:%SZ"
     - "%Y-%m-%dT%H:%M:%S.%fZ"
     - "%Y-%m-%d"
-    start_datetime: "{{ config.get('phone_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
+    start_datetime: "{{ config.get('phone_initial_start_date', day_delta(-30, format='%Y-%m-%d')) }}"
     end_datetime: "{{ now_utc().strftime('%Y-%m-%d') }}"
     cursor_granularity: "P1D"
     step: "P1D"
@@ -15077,15 +15077,15 @@ spec:
         order: 3
         default: "https://zoom.us/oauth/token"
         description: "The Zoom OAuth token endpoint."
-      phone_start_date:
+      phone_initial_start_date:
         type: string
-        title: "Zoom Phone Start Date"
+        title: "Zoom Phone Initial Start Date"
         order: 4
         format: date
         pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
         examples:
         - "2026-03-05"
-        description: "Optional start date for Zoom Phone data. Unlike other streams, the call history will only this date when it falls within Zoom's six-month report window"
+        description: "Optional initial start date for Zoom Phone incremental streams. If omitted, the connector starts 30 days before the current date. This value is used only when a stream has no saved Airbyte state; after state exists, the saved cursor plus that stream's lookback window determines where the next sync resumes. Changing this value does not rewind existing state, so reset the relevant stream state to backfill from an earlier date. Phone call history is additionally limited to Zoom's six-month API history window."
       num_workers:
         type: integer
         title: "Concurrent Workers"
