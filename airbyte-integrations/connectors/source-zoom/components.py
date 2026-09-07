@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from importlib.metadata import PackageNotFoundError, version as package_version
 from threading import Lock, Thread
-from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Union
+from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Tuple, Union
 from urllib.parse import urlsplit
 
 import requests
@@ -25,6 +25,7 @@ from airbyte_cdk.sources.declarative.migrations.state_migration import StateMigr
 from airbyte_cdk.sources.declarative.extractors.record_extractor import RecordExtractor
 from airbyte_cdk.sources.declarative.partition_routers.substream_partition_router import SafeResponse
 from airbyte_cdk.sources.declarative.requesters.http_requester import HttpRequester
+from airbyte_cdk.sources.streams.http import HttpClient
 from airbyte_cdk.sources.declarative.types import Config
 
 
@@ -272,95 +273,340 @@ class TimelineRecordExtractor(RecordExtractor):
 
 
 @dataclass
+class _ZoomPhoneHttpMetrics:
+    """Process-wide HTTP metrics shared by concurrent requester/client instances."""
+
+    lock: Lock = field(default_factory=Lock, repr=False)
+    started: int = 0
+    completed: int = 0
+    active: int = 0
+    cache_hits: int = 0
+    failures: int = 0
+    total_duration_ms: int = 0
+    last_activity_monotonic: float = field(default_factory=time.monotonic)
+    last_status: Optional[int] = None
+    last_from: Optional[str] = None
+    last_to: Optional[str] = None
+    heartbeat_started: bool = False
+
+
+class ZoomPhoneHttpClient(HttpClient):
+    """Single HTTP observability point for every Zoom Phone logical request.
+
+    All Phone requesters instantiate this client. Metrics are process-wide and keyed
+    by (stream name, requester role), so concurrent component copies cannot split the
+    counters and hide progress. The underlying Airbyte HttpClient still owns request
+    preparation, caching, API budgets, retries, authentication, and error handling.
+    """
+
+    _summary_every: ClassVar[int] = 200
+    _heartbeat_interval_seconds: ClassVar[int] = 300
+    _heartbeat_idle_grace_intervals: ClassVar[int] = 12
+    _registry: ClassVar[dict[tuple[str, str], _ZoomPhoneHttpMetrics]] = {}
+    _registry_lock: ClassVar[Lock] = Lock()
+
+    def __init__(
+        self,
+        *,
+        display_name: str,
+        requester_role: str,
+        rate_limit_category: str,
+        **kwargs: Any,
+    ) -> None:
+        self._display_name = display_name
+        self._requester_role = requester_role
+        self._rate_limit_category = rate_limit_category
+        super().__init__(**kwargs)
+
+    @property
+    def _metrics_key(self) -> tuple[str, str]:
+        return self._display_name, self._requester_role
+
+    def _metrics(self) -> _ZoomPhoneHttpMetrics:
+        key = self._metrics_key
+        with self._registry_lock:
+            metrics = self._registry.get(key)
+            if metrics is None:
+                metrics = _ZoomPhoneHttpMetrics()
+                self._registry[key] = metrics
+            return metrics
+
+    @staticmethod
+    def _safe_endpoint(url: str) -> str:
+        path = urlsplit(url).path
+        return re.sub(
+            r"(/v2/phone/recording_transcript/download/)[^/]+$",
+            r"\1{recording_id}",
+            path,
+        )
+
+    def _emit(self, level: Level, message: str) -> None:
+        if self._message_repository is not None:
+            self._message_repository.emit_message(
+                AirbyteMessage(
+                    type=Type.LOG,
+                    log=AirbyteLogMessage(level=level, message=message),
+                )
+            )
+            return
+
+        if level in (Level.ERROR, Level.FATAL):
+            self._logger.error(message)
+        elif level == Level.WARN:
+            self._logger.warning(message)
+        else:
+            self._logger.info(message)
+
+    def _snapshot(self) -> tuple[int, int, int, int, int, int, float, Optional[int], Optional[str], Optional[str]]:
+        metrics = self._metrics()
+        with metrics.lock:
+            return (
+                metrics.started,
+                metrics.completed,
+                metrics.active,
+                metrics.cache_hits,
+                metrics.failures,
+                metrics.total_duration_ms,
+                metrics.last_activity_monotonic,
+                metrics.last_status,
+                metrics.last_from,
+                metrics.last_to,
+            )
+
+    def _emit_summary(self, *, heartbeat: bool = False) -> None:
+        (
+            started,
+            completed,
+            active,
+            cache_hits,
+            failures,
+            total_duration_ms,
+            last_activity_monotonic,
+            last_status,
+            last_from,
+            last_to,
+        ) = self._snapshot()
+
+        avg_ms = round(total_duration_ms / completed) if completed else 0
+        cache_rate = (cache_hits / completed) * 100 if completed else 0.0
+        fields = [
+            f"[{self._display_name}]",
+            *(["(heartbeat)"] if heartbeat else []),
+            f"role={self._requester_role}",
+            f"requests={completed}",
+            f"started={started}",
+            f"active={active}",
+            f"avg_ms={avg_ms}",
+            f"cache_hits={cache_hits}",
+            f"cache={cache_rate:.1f}%",
+            f"failures={failures}",
+        ]
+
+        if heartbeat:
+            fields.append(f"idle_s={max(0, round(time.monotonic() - last_activity_monotonic))}")
+
+        if last_status is not None:
+            fields.append(f"last_status={last_status}")
+        if last_from is not None:
+            fields.append(f"last_from={last_from}")
+        if last_to is not None:
+            fields.append(f"last_to={last_to}")
+
+        self._emit(Level.INFO, " ".join(fields))
+
+    def _heartbeat_loop(self) -> None:
+        metrics = self._metrics()
+        while True:
+            time.sleep(self._heartbeat_interval_seconds)
+            with metrics.lock:
+                started = metrics.started
+                active = metrics.active
+                last_activity = metrics.last_activity_monotonic
+
+            if started == 0:
+                continue
+
+            idle_seconds = time.monotonic() - last_activity
+            idle_grace_seconds = self._heartbeat_interval_seconds * self._heartbeat_idle_grace_intervals
+            if active == 0 and idle_seconds > idle_grace_seconds:
+                continue
+
+            self._emit_summary(heartbeat=True)
+
+    def _ensure_heartbeat_started(self) -> None:
+        metrics = self._metrics()
+        with metrics.lock:
+            if metrics.heartbeat_started:
+                return
+            metrics.heartbeat_started = True
+
+        Thread(
+            target=self._heartbeat_loop,
+            name=f"zoom-http-heartbeat-{self._display_name}-{self._requester_role}",
+            daemon=True,
+        ).start()
+
+    def send_request(
+        self,
+        http_method: str,
+        url: str,
+        request_kwargs: Mapping[str, Any],
+        headers: Optional[Mapping[str, str]] = None,
+        params: Optional[Mapping[str, str]] = None,
+        json: Optional[Mapping[str, Any]] = None,
+        data: Optional[Union[str, Mapping[str, Any]]] = None,
+        dedupe_query_params: bool = False,
+        log_formatter: Optional[Callable[[requests.Response], Any]] = None,
+        exit_on_rate_limit: Optional[bool] = False,
+    ) -> Tuple[requests.PreparedRequest, requests.Response]:
+        metrics = self._metrics()
+        request_from = str(params.get("from")) if params and params.get("from") is not None else None
+        request_to = str(params.get("to")) if params and params.get("to") is not None else None
+
+        with metrics.lock:
+            metrics.started += 1
+            started_count = metrics.started
+            metrics.active += 1
+            metrics.last_activity_monotonic = time.monotonic()
+            if request_from is not None:
+                metrics.last_from = request_from
+            if request_to is not None:
+                metrics.last_to = request_to
+
+        self._ensure_heartbeat_started()
+
+        if self._requester_role == "transcript_parent" and started_count == 1:
+            fields = [
+                f"[{self._display_name}]",
+                "role=transcript_parent",
+                "http=start",
+            ]
+            if request_from is not None:
+                fields.append(f"from={request_from}")
+            if request_to is not None:
+                fields.append(f"to={request_to}")
+            self._emit(Level.INFO, " ".join(fields))
+
+        started_at = time.monotonic()
+        try:
+            request, response = super().send_request(
+                http_method=http_method,
+                url=url,
+                request_kwargs=request_kwargs,
+                headers=headers,
+                params=params,
+                json=json,
+                data=data,
+                dedupe_query_params=dedupe_query_params,
+                log_formatter=log_formatter,
+                exit_on_rate_limit=exit_on_rate_limit,
+            )
+        except Exception as exc:
+            duration_ms = round((time.monotonic() - started_at) * 1000)
+            with metrics.lock:
+                metrics.completed += 1
+                completed_count = metrics.completed
+                metrics.active = max(0, metrics.active - 1)
+                metrics.failures += 1
+                metrics.total_duration_ms += duration_ms
+                metrics.last_activity_monotonic = time.monotonic()
+
+            self._emit(
+                Level.WARN,
+                f"Failed [{self._display_name}] "
+                f"role={self._requester_role} "
+                f"method={http_method} "
+                f"endpoint={self._safe_endpoint(url)} "
+                f"category={self._rate_limit_category} "
+                f"duration_ms={duration_ms} "
+                f"error={type(exc).__name__}",
+            )
+            if completed_count % self._summary_every == 0:
+                self._emit_summary()
+            raise
+
+        duration_ms = round((time.monotonic() - started_at) * 1000)
+        from_cache = bool(getattr(response, "from_cache", False))
+        with metrics.lock:
+            metrics.completed += 1
+            completed_count = metrics.completed
+            metrics.active = max(0, metrics.active - 1)
+            metrics.total_duration_ms += duration_ms
+            metrics.last_activity_monotonic = time.monotonic()
+            metrics.last_status = response.status_code
+            if from_cache:
+                metrics.cache_hits += 1
+
+        if response.status_code == HTTPStatus.TOO_MANY_REQUESTS or response.status_code >= 500:
+            self._emit(
+                Level.WARN,
+                f"Response [{self._display_name}] "
+                f"role={self._requester_role} "
+                f"method={http_method} "
+                f"endpoint={self._safe_endpoint(url)} "
+                f"category={self._rate_limit_category} "
+                f"status={response.status_code} "
+                f"duration_ms={duration_ms} "
+                f"cache_hit={from_cache}",
+            )
+
+        if self._requester_role == "transcript_parent" and completed_count == 1:
+            self._emit_summary()
+        elif completed_count % self._summary_every == 0:
+            self._emit_summary()
+
+        return request, response
+
+
+@dataclass
 class ZoomPhoneLoggingRequester(HttpRequester):
-    """
-    Adds compact Zoom Phone request telemetry without logging secrets, bodies,
-    pagination token values, or resolved path IDs.
-    """
+    """Zoom Phone requester backed by the observable ZoomPhoneHttpClient."""
 
     rate_limit_category: str = "UNKNOWN"
     history_limit_months: Optional[int] = None
     requester_role: str = "default"
     cache_name: Optional[str] = None
-    _summary_every: ClassVar[int] = 200
-    _periodic_summary_interval_seconds: ClassVar[int] = 300
-    _periodic_summary_idle_grace_intervals: ClassVar[int] = 12
+
     _runtime_version_logged: ClassVar[bool] = False
     _runtime_version_lock: ClassVar[Lock] = Lock()
-    _rate_limit_configs_logged: ClassVar[set[tuple[str, str]]] = set()
+    _rate_limit_configs_logged: ClassVar[set[tuple[str, str, str]]] = set()
     _rate_limit_config_lock: ClassVar[Lock] = Lock()
-    _request_count: int = field(default=0, init=False, repr=False)
-    _cache_hit_count: int = field(default=0, init=False, repr=False)
-    _total_duration_ms: int = field(default=0, init=False, repr=False)
-    _history_limit_checked: bool = field(default=False, init=False, repr=False)
-    _periodic_logger_started: bool = field(default=False, init=False, repr=False)
-    _periodic_logger_lock: Lock = field(default_factory=Lock, init=False, repr=False)
-    _metrics_lock: Lock = field(default_factory=Lock, init=False, repr=False)
-    _active_http_request_count: int = field(default=0, init=False, repr=False)
-    _last_activity_monotonic: float = field(default_factory=time.monotonic, init=False, repr=False)
-    _parent_scan_started: bool = field(default=False, init=False, repr=False)
-    _last_request_from: Optional[str] = field(default=None, init=False, repr=False)
-    _last_request_to: Optional[str] = field(default=None, init=False, repr=False)
-    _last_response_status: Optional[int] = field(default=None, init=False, repr=False)
 
     def __post_init__(self, parameters: Mapping[str, Any]) -> None:
-        # Let Airbyte own the cache implementation. The optional alias only makes
-        # requesters for the same endpoint share Airbyte's native cache namespace.
         display_name = self.name
-        self.name = self.cache_name or display_name
+        cache_key = self.cache_name or display_name
+
+        # HttpRequester has no client factory hook in CDK 7.28.3, so initialize
+        # its standard fields first, then replace only the client implementation.
+        self.name = cache_key
         try:
             super().__post_init__(parameters)
         finally:
             self.name = display_name
 
-        if not ZoomPhoneLoggingRequester._runtime_version_logged:
-            with ZoomPhoneLoggingRequester._runtime_version_lock:
-                if not ZoomPhoneLoggingRequester._runtime_version_logged:
-                    try:
-                        cdk_version = package_version("airbyte-cdk")
-                    except PackageNotFoundError:
-                        cdk_version = "unknown"
-                    configured_workers = self.config.get("num_workers", 20)
-                    light_rps = self.config.get("phone_light_requests_per_second", 20)
-                    medium_rps = self.config.get("phone_medium_requests_per_second", 10)
-                    heavy_rps = self.config.get("phone_heavy_requests_per_second", 5)
-                    heavy_per_day = self.config.get("phone_heavy_requests_per_day", 15000)
-                    self.logger.info(f"Runtime cdk={cdk_version} workers={configured_workers}")
-                    self.logger.info(
-                        "API budget "
-                        f"light={light_rps}/s "
-                        f"medium={medium_rps}/s "
-                        f"heavy={heavy_rps}/s "
-                        f"heavy_day={heavy_per_day}/day",
-                    )
-                    ZoomPhoneLoggingRequester._runtime_version_logged = True
-
-        rate_config_key = (self.name, self.rate_limit_category)
-        with ZoomPhoneLoggingRequester._rate_limit_config_lock:
-            if rate_config_key not in ZoomPhoneLoggingRequester._rate_limit_configs_logged:
-                self.logger.info(f"RateLimit [{self.name}] category={self.rate_limit_category}")
-                ZoomPhoneLoggingRequester._rate_limit_configs_logged.add(rate_config_key)
-
-    @staticmethod
-    def _raw_value(value: Any) -> str:
-        if isinstance(value, InterpolatedString):
-            return value.string
-        return str(value or "")
-
-    def _safe_endpoint(self, url: str) -> str:
-        raw_path = self._raw_value(self.path)
-        if not raw_path:
-            return urlsplit(url).path
-
-        raw_base = self._raw_value(self.url_base)
-        base_path = urlsplit(raw_base).path.rstrip("/") if raw_base else ""
-        endpoint = f"{base_path}/{raw_path.lstrip('/')}"
-        endpoint = re.sub(
-            r"\{\{\s*([^{}]+?)\s*\}\}",
-            lambda match: "{" + match.group(1).strip() + "}",
-            endpoint,
+        backoff_strategies = (
+            self.error_handler.backoff_strategies
+            if self.error_handler is not None and hasattr(self.error_handler, "backoff_strategies")
+            else None
         )
-        return "/" + endpoint.lstrip("/")
+        self._http_client = ZoomPhoneHttpClient(
+            name=cache_key,
+            display_name=display_name,
+            requester_role=self.requester_role,
+            rate_limit_category=self.rate_limit_category,
+            logger=self.logger,
+            error_handler=self.error_handler,
+            api_budget=self.api_budget,
+            authenticator=self._authenticator,
+            use_cache=self.use_cache,
+            backoff_strategy=backoff_strategies,
+            disable_retries=self.disable_retries,
+            message_repository=self.message_repository,
+        )
+
+        self._log_runtime_configuration_once()
+        self._log_rate_limit_configuration_once()
+        self._warn_if_history_window_exceeded()
 
     @staticmethod
     def _months_ago(months: int) -> date:
@@ -371,14 +617,47 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         day = min(today.day, monthrange(year, month)[1])
         return date(year, month, day)
 
-    def _check_history_limit(self) -> None:
-        if (
-            self._history_limit_checked
-            or self.history_limit_months is None
-        ):
+    def _log_runtime_configuration_once(self) -> None:
+        if ZoomPhoneLoggingRequester._runtime_version_logged:
             return
 
-        self._history_limit_checked = True
+        with ZoomPhoneLoggingRequester._runtime_version_lock:
+            if ZoomPhoneLoggingRequester._runtime_version_logged:
+                return
+            try:
+                cdk_version = package_version("airbyte-cdk")
+            except PackageNotFoundError:
+                cdk_version = "unknown"
+
+            configured_workers = self.config.get("num_workers", 20)
+            light_rps = self.config.get("phone_light_requests_per_second", 20)
+            medium_rps = self.config.get("phone_medium_requests_per_second", 10)
+            heavy_rps = self.config.get("phone_heavy_requests_per_second", 5)
+            heavy_per_day = self.config.get("phone_heavy_requests_per_day", 15000)
+            self.logger.info(f"Runtime cdk={cdk_version} workers={configured_workers}")
+            self.logger.info(
+                "API budget "
+                f"light={light_rps}/s "
+                f"medium={medium_rps}/s "
+                f"heavy={heavy_rps}/s "
+                f"heavy_day={heavy_per_day}/day"
+            )
+            ZoomPhoneLoggingRequester._runtime_version_logged = True
+
+    def _log_rate_limit_configuration_once(self) -> None:
+        key = (self.name, self.requester_role, self.rate_limit_category)
+        with ZoomPhoneLoggingRequester._rate_limit_config_lock:
+            if key in ZoomPhoneLoggingRequester._rate_limit_configs_logged:
+                return
+            self.logger.info(
+                f"RateLimit [{self.name}] role={self.requester_role} category={self.rate_limit_category}"
+            )
+            ZoomPhoneLoggingRequester._rate_limit_configs_logged.add(key)
+
+    def _warn_if_history_window_exceeded(self) -> None:
+        if self.history_limit_months is None:
+            return
+
         configured_start = self.config.get("phone_start_date")
         if not configured_start:
             return
@@ -394,288 +673,13 @@ class ZoomPhoneLoggingRequester(HttpRequester):
                 f"Notice [{self.name}] "
                 f"requested_phone_start_date={requested_start.isoformat()} "
                 f"exceeds_zoom_history_window={self.history_limit_months}m "
-                f"effective_start_date={earliest_start.isoformat()}",
+                f"effective_start_date={earliest_start.isoformat()}"
             )
-
-    def _cache_metrics_enabled(self) -> bool:
-        return self.use_cache
-
-    def _record_request_metrics(self, duration_ms: int, from_cache: bool) -> int:
-        with self._metrics_lock:
-            self._request_count += 1
-            self._total_duration_ms += duration_ms
-            if from_cache:
-                self._cache_hit_count += 1
-            self._last_activity_monotonic = time.monotonic()
-            return self._request_count
-
-    def _emit_parent_log(self, level: Level, message: str) -> None:
-        """Emit parent-stream logs through Airbyte's message repository.
-
-        Parent requests run inside concurrent substream partition generation. Using
-        the requester's MessageRepository ensures the log is forwarded through the
-        ConcurrentMessageRepository/main Airbyte output queue instead of relying on
-        ordinary Python logger propagation from that worker path.
-        """
-        self.message_repository.emit_message(
-            AirbyteMessage(
-                type=Type.LOG,
-                log=AirbyteLogMessage(level=level, message=message),
-            )
-        )
-
-    def _emit_info(self, message: str) -> None:
-        if self.requester_role == "transcript_parent":
-            self._emit_parent_log(Level.INFO, message)
-        else:
-            self.logger.info(message)
-
-    def _emit_warning(self, message: str) -> None:
-        if self.requester_role == "transcript_parent":
-            self._emit_parent_log(Level.WARN, message)
-        else:
-            self.logger.warning(message)
-
-    def _log_summary(self, periodic: bool = False) -> None:
-        with self._metrics_lock:
-            request_count = self._request_count
-            cache_hit_count = self._cache_hit_count
-            total_duration_ms = self._total_duration_ms
-            active_http_requests = self._active_http_request_count
-            last_activity_monotonic = self._last_activity_monotonic
-            last_request_from = self._last_request_from
-            last_request_to = self._last_request_to
-            last_response_status = self._last_response_status
-
-        average_duration_ms = (
-            round(total_duration_ms / request_count) if request_count else 0
-        )
-
-        fields = [
-            f"[{self.name}]",
-            *(["(heartbeat)"] if periodic else []),
-            f"role={self.requester_role}",
-            f"requests={request_count}",
-            f"active={active_http_requests}",
-            f"avg_ms={average_duration_ms}",
-        ]
-
-        if periodic:
-            seconds_since_activity = max(
-                0, round(time.monotonic() - last_activity_monotonic)
-            )
-            fields.append(f"idle_s={seconds_since_activity}")
-
-        if self._cache_metrics_enabled():
-            cache_hit_rate = (
-                (cache_hit_count / request_count) * 100 if request_count else 0.0
-            )
-            fields.extend(
-                [
-                    f"cache_hits={cache_hit_count}",
-                    f"cache={cache_hit_rate:.1f}%",
-                ]
-            )
-
-        if self.requester_role == "transcript_parent":
-            if last_response_status is not None:
-                fields.append(f"last_status={last_response_status}")
-            if last_request_from is not None:
-                fields.append(f"last_from={last_request_from}")
-            if last_request_to is not None:
-                fields.append(f"last_to={last_request_to}")
-
-        self._emit_info(" ".join(fields))
-
-    def _periodic_summary_loop(self) -> None:
-        while True:
-            time.sleep(self._periodic_summary_interval_seconds)
-
-            with self._metrics_lock:
-                request_count = self._request_count
-                active_http_requests = self._active_http_request_count
-                last_activity_monotonic = self._last_activity_monotonic
-
-            if request_count == 0 and active_http_requests == 0:
-                continue
-
-            seconds_since_activity = time.monotonic() - last_activity_monotonic
-            idle_grace_seconds = (
-                self._periodic_summary_interval_seconds
-                * self._periodic_summary_idle_grace_intervals
-            )
-            if active_http_requests == 0 and seconds_since_activity > idle_grace_seconds:
-                continue
-
-            self._log_summary(periodic=True)
-
-    def _ensure_periodic_logger_started(self) -> None:
-        if self._periodic_logger_started:
-            return
-
-        with self._periodic_logger_lock:
-            if self._periodic_logger_started:
-                return
-
-            Thread(
-                target=self._periodic_summary_loop,
-                name=f"zoom-periodic-summary-{self.name}",
-                daemon=True,
-            ).start()
-            self._periodic_logger_started = True
-
-    def send_request(
-        self,
-        stream_state: Optional[Any] = None,
-        stream_slice: Optional[Any] = None,
-        next_page_token: Optional[Mapping[str, Any]] = None,
-        path: Optional[str] = None,
-        request_headers: Optional[Mapping[str, Any]] = None,
-        request_params: Optional[Mapping[str, Any]] = None,
-        request_body_data: Optional[Union[Mapping[str, Any], str]] = None,
-        request_body_json: Optional[Mapping[str, Any]] = None,
-        log_formatter: Optional[Callable[[requests.Response], Any]] = None,
-    ) -> Optional[requests.Response]:
-        self._check_history_limit()
-        self._ensure_periodic_logger_started()
-        with self._metrics_lock:
-            self._active_http_request_count += 1
-            self._last_activity_monotonic = time.monotonic()
-
-        url = self._get_url(
-            path=path,
-            stream_state=stream_state,
-            stream_slice=stream_slice,
-            next_page_token=next_page_token,
-        )
-        endpoint = self._safe_endpoint(url)
-        params = self._request_params(
-            stream_state,
-            stream_slice,
-            next_page_token,
-            request_params,
-        )
-
-        if self.requester_role == "transcript_parent":
-            request_from = params.get("from")
-            request_to = params.get("to")
-            log_parent_start = False
-            with self._metrics_lock:
-                if request_from is not None:
-                    self._last_request_from = str(request_from)
-                if request_to is not None:
-                    self._last_request_to = str(request_to)
-                if not self._parent_scan_started:
-                    self._parent_scan_started = True
-                    log_parent_start = True
-            if log_parent_start:
-                fields = [f"[{self.name}]", "role=transcript_parent", "parent_scan=start"]
-                if request_from is not None:
-                    fields.append(f"from={request_from}")
-                if request_to is not None:
-                    fields.append(f"to={request_to}")
-                self._emit_info(" ".join(fields))
-
-        started = time.monotonic()
-
-        try:
-            response = super().send_request(
-                stream_state=stream_state,
-                stream_slice=stream_slice,
-                next_page_token=next_page_token,
-                path=path,
-                request_headers=request_headers,
-                request_params=request_params,
-                request_body_data=request_body_data,
-                request_body_json=request_body_json,
-                log_formatter=log_formatter,
-            )
-        except Exception as exc:
-            duration_ms = round((time.monotonic() - started) * 1000)
-            self._emit_warning(
-                f"Failed [{self.name}] "
-                f"method={self.get_method().value} "
-                f"endpoint={endpoint} "
-                f"category={self.rate_limit_category} "
-                f"duration_ms={duration_ms} "
-                f"error={type(exc).__name__}"
-            )
-            raise
-        finally:
-            with self._metrics_lock:
-                self._active_http_request_count = max(
-                    0, self._active_http_request_count - 1
-                )
-                self._last_activity_monotonic = time.monotonic()
-
-        duration_ms = round((time.monotonic() - started) * 1000)
-
-        if response is None:
-            self._emit_warning(
-                f"Response [{self.name}] "
-                f"method={self.get_method().value} "
-                f"endpoint={endpoint} "
-                f"category={self.rate_limit_category} "
-                f"status=none "
-                f"duration_ms={duration_ms}"
-            )
-            return response
-
-        headers = response.headers
-        from_cache = bool(getattr(response, "from_cache", False))
-        request_count = self._record_request_metrics(duration_ms, from_cache)
-        if self.requester_role == "transcript_parent":
-            with self._metrics_lock:
-                self._last_response_status = response.status_code
-
-        fields = [
-            f"[{self.name}]",
-            f"method={self.get_method().value}",
-            f"endpoint={endpoint}",
-            f"category={self.rate_limit_category}",
-            f"status={response.status_code}",
-            f"duration_ms={duration_ms}",
-        ]
-
-        if self._cache_metrics_enabled():
-            fields.append(f"cache_hit={from_cache}")
-
-        if not from_cache:
-            fields.append(f"http_ms={round(response.elapsed.total_seconds() * 1000)}")
-
-        for key in ("from", "to", "recording_status", "page_size"):
-            value = params.get(key)
-            if value is not None:
-                fields.append(f"{key}={value}")
-
-        if next_page_token is not None:
-            fields.append("continuation=true")
-
-        zoom_headers = (
-            ("zoom_category", "X-RateLimit-Category"),
-            ("zoom_limit_type", "X-RateLimit-Type"),
-            ("zoom_limit", "X-RateLimit-Limit"),
-            ("zoom_remaining", "X-RateLimit-Remaining"),
-            ("retry_after", "Retry-After"),
-        )
-        for label, header_name in zoom_headers:
-            value = headers.get(header_name)
-            if value is not None:
-                fields.append(f"{label}={value}")
-
-        message = " ".join(fields)
-        if response.status_code == HTTPStatus.TOO_MANY_REQUESTS or response.status_code >= 500:
-            self._emit_warning(message)
-
-        if request_count % self._summary_every == 0:
-            self._log_summary()
-
-        return response
 
 
 @dataclass
 class ZoomPhoneCachedRequester(ZoomPhoneLoggingRequester):
-    """Enable Airbyte's native HTTP cache before HttpRequester builds its HttpClient."""
+    """Enable Airbyte's native HTTP cache for Zoom Phone parent/transcript requests."""
 
     use_cache: bool = True
 
