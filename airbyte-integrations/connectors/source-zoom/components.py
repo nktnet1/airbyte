@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Lock, RLock, Thread
 from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Union
 from urllib.parse import parse_qs, urlsplit
 
@@ -527,13 +527,20 @@ class ZoomPhoneLoggingRequester(HttpRequester):
                 cdk_version = package_version("airbyte-cdk")
             except PackageNotFoundError:
                 cdk_version = "unknown"
+            try:
+                requests_cache_version = package_version("requests-cache")
+            except PackageNotFoundError:
+                requests_cache_version = "unknown"
 
             configured_workers = self.config.get("num_workers", 20)
             light_rps = self.config.get("phone_light_requests_per_second", 20)
             medium_rps = self.config.get("phone_medium_requests_per_second", 10)
             heavy_rps = self.config.get("phone_heavy_requests_per_second", 5)
             heavy_per_day = self.config.get("phone_heavy_requests_per_day", 15000)
-            self.logger.info(f"Runtime cdk={cdk_version} workers={configured_workers}")
+            self.logger.info(
+                f"Runtime cdk={cdk_version} requests_cache={requests_cache_version} "
+                f"workers={configured_workers}"
+            )
             self.logger.info(
                 "API budget "
                 f"light={light_rps}/s "
@@ -580,17 +587,33 @@ class ZoomPhoneLoggingRequester(HttpRequester):
 class ZoomPhoneCachedRequester(ZoomPhoneLoggingRequester):
     """Zoom Phone requester using Airbyte's native SQLite HTTP cache on disk.
 
-    Airbyte falls back to an in-memory cache when ``REQUEST_CACHE_PATH`` is not
-    set. A per-job temporary disk cache is preferable here because transcript
-    and timeline are separate serialized streams that intentionally reuse the
-    exact same transcript-download responses.
+    Airbyte's HttpClient currently hardcodes requests-cache's SQLite backend when
+    ``use_cache`` is enabled. The same ``phone_recordings`` cache file is shared
+    by the normal phone_recordings stream and the embedded parent traversal used
+    by the transcript streams so identical parent requests can be reused.
+
+    With concurrent CDK workers, however, Airbyte can create multiple requester
+    instances that each open the same SQLite cache file with their own lock. On
+    requests-cache versions that use the older three-write retry loop, this can
+    surface as ``database is locked`` / ``retrying (1/3)`` warnings even though
+    the API requests themselves are healthy.
+
+    Keep HTTP requests fully concurrent, but make all requester instances that
+    point at the same SQLite file share one process-wide RLock for cache access.
+    Also give SQLite a 30-second busy timeout so a rare lock from another
+    connection waits instead of immediately entering requests-cache's retry loop.
+    This affects only the tiny local cache read/write section; it does not reduce
+    ``num_workers`` or serialize calls to Zoom.
     """
 
     use_cache: bool = True
 
     _default_cache_dir: ClassVar[str] = "/tmp/airbyte-request-cache"
+    _sqlite_busy_timeout_ms: ClassVar[int] = 30_000
     _cache_configs_logged: ClassVar[set[tuple[str, str]]] = set()
     _cache_config_lock: ClassVar[Lock] = Lock()
+    _sqlite_cache_locks: ClassVar[dict[str, Any]] = {}
+    _sqlite_cache_locks_lock: ClassVar[Lock] = Lock()
 
     def __post_init__(self, parameters: Mapping[str, Any]) -> None:
         cache_dir = os.environ.get("REQUEST_CACHE_PATH") or self._default_cache_dir
@@ -600,14 +623,96 @@ class ZoomPhoneCachedRequester(ZoomPhoneLoggingRequester):
         self.use_cache = True
         super().__post_init__(parameters)
 
+        db_path = self._configure_native_sqlite_cache()
         cache_key = self.cache_name or self.name
-        log_key = (cache_key, cache_dir)
+        log_key = (cache_key, db_path or cache_dir)
         with self._cache_config_lock:
             if log_key not in self._cache_configs_logged:
-                self.logger.info(
-                    f"Cache [{self.name}] namespace={cache_key} backend=sqlite path={cache_dir}"
-                )
+                fields = [
+                    f"Cache [{self.name}]",
+                    f"namespace={cache_key}",
+                    "backend=sqlite",
+                    f"path={db_path or cache_dir}",
+                    f"busy_timeout_ms={self._sqlite_busy_timeout_ms}",
+                    "shared_process_lock=true",
+                ]
+                self.logger.info(" ".join(fields))
                 self._cache_configs_logged.add(log_key)
+
+    @classmethod
+    def _shared_sqlite_lock(cls, db_path: str) -> Any:
+        """Return one RLock for every requester instance using the same DB file."""
+        with cls._sqlite_cache_locks_lock:
+            lock = cls._sqlite_cache_locks.get(db_path)
+            if lock is None:
+                lock = RLock()
+                cls._sqlite_cache_locks[db_path] = lock
+            return lock
+
+    def _configure_native_sqlite_cache(self) -> Optional[str]:
+        """Harden Airbyte's native requests-cache SQLite backend for concurrency.
+
+        Airbyte's HttpClient constructs ``requests_cache.SQLiteCache`` internally,
+        so the declarative manifest cannot pass ``busy_timeout`` or a shared lock
+        into the backend constructor. Configure the already-created backend here.
+
+        The responses and redirects stores are both pointed at the same DB file.
+        Every Zoom Phone requester instance using that file receives the same
+        process-wide RLock. Existing connections get ``PRAGMA busy_timeout``
+        immediately; future connections also receive a 30-second sqlite3 timeout.
+        """
+        http_client = getattr(self, "_http_client", None)
+        session = getattr(http_client, "_session", None)
+        cache = getattr(session, "cache", None)
+        responses = getattr(cache, "responses", None)
+        redirects = getattr(cache, "redirects", None)
+
+        if responses is None:
+            self.logger.warning(
+                f"Cache [{self.name}] could not configure SQLite contention settings; "
+                "native cache backend was not found"
+            )
+            return None
+
+        db_path = str(getattr(responses, "db_path", self.cache_name or self.name))
+        shared_lock = self._shared_sqlite_lock(db_path)
+
+        # requests-cache keeps separate response and redirect stores. Airbyte may
+        # also create multiple requester/cache objects for the same stream. Give
+        # every store using this DB the exact same process-wide lock.
+        for store in (responses, redirects):
+            if store is None:
+                continue
+
+            if hasattr(store, "_lock"):
+                store._lock = shared_lock
+
+            if hasattr(store, "busy_timeout"):
+                store.busy_timeout = self._sqlite_busy_timeout_ms
+
+            connection_kwargs = getattr(store, "connection_kwargs", None)
+            if isinstance(connection_kwargs, dict):
+                connection_kwargs["timeout"] = self._sqlite_busy_timeout_ms / 1000
+
+            # requests-cache initializes SQLite during backend construction, so
+            # a connection may already be open before we can change its settings.
+            # Apply the busy timeout to that connection now as well as to future
+            # connections configured above.
+            connection = getattr(store, "_connection", None)
+            if connection is not None:
+                try:
+                    with shared_lock:
+                        connection.execute(
+                            f"PRAGMA busy_timeout={self._sqlite_busy_timeout_ms}"
+                        )
+                except sqlite3.Error as exc:
+                    self.logger.warning(
+                        f"Cache [{self.name}] failed to apply SQLite busy timeout "
+                        f"error={type(exc).__name__}"
+                    )
+
+        return db_path
+
 
 @dataclass
 class ZoomPhoneTranscriptRequester(ZoomPhoneLoggingRequester):
