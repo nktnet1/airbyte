@@ -23,7 +23,7 @@ jobs:
 
       - name: Install Airbyte CDK
         run: |
-          uv tool install 'airbyte-cdk[dev]'
+          uv tool install 'airbyte-cdk[dev]==7.28.3'
           echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
 
       - name: Extract version
