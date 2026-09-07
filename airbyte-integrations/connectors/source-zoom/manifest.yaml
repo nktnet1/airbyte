@@ -7154,6 +7154,7 @@ definitions:
         primary_key: id
       parent_key: id
       partition_field: parent_id
+      incremental_dependency: true
       extra_fields:
       - - call_id
       - - call_log_id
@@ -7188,6 +7189,9 @@ definitions:
       type: SimpleRetriever
     incremental_sync:
       $ref: '#/definitions/phone_transcript_incremental_sync'
+    state_migrations:
+    - type: CustomStateMigration
+      class_name: source_declarative_manifest.components.ZoomPhoneTranscriptStateMigration
     transformations:
     - type: AddFields
       fields:
@@ -7283,6 +7287,9 @@ definitions:
       type: SimpleRetriever
     incremental_sync:
       $ref: '#/definitions/phone_transcript_incremental_sync'
+    state_migrations:
+    - type: CustomStateMigration
+      class_name: source_declarative_manifest.components.ZoomPhoneTranscriptStateMigration
     transformations:
     - type: AddFields
       fields:

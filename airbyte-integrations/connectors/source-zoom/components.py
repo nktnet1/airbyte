@@ -20,6 +20,7 @@ from requests import HTTPError
 
 from airbyte_cdk.sources.declarative.auth.declarative_authenticator import NoAuth
 from airbyte_cdk.sources.declarative.interpolation import InterpolatedString
+from airbyte_cdk.sources.declarative.migrations.state_migration import StateMigration
 from airbyte_cdk.sources.declarative.extractors.record_extractor import RecordExtractor
 from airbyte_cdk.sources.declarative.partition_routers.substream_partition_router import SafeResponse
 from airbyte_cdk.sources.declarative.requesters.http_requester import HttpRequester
@@ -99,6 +100,100 @@ class ServerToServerOauthAuthenticator(NoAuth):
         except Exception as e:
             raise Exception(f"Error while generating access token: {e}") from e
 
+
+
+@dataclass
+class ZoomPhoneTranscriptStateMigration(StateMigration):
+    """Repair transcript/timeline parent state for incremental parent traversal.
+
+    The child cursor ``recording_date_time`` is copied directly from the
+    ``phone_recordings.date_time`` parent record, so it is safe to use as the
+    initial parent cursor when upgrading existing state that predates
+    ``incremental_dependency: true``.
+    """
+
+    _logger: ClassVar[logging.Logger] = logging.getLogger("airbyte.phone_transcript_state")
+    _parent_stream_name: ClassVar[str] = "phone_recordings"
+    _parent_cursor_field: ClassVar[str] = "date_time"
+    _child_cursor_field: ClassVar[str] = "recording_date_time"
+
+    @classmethod
+    def _candidate_parent_cursor(cls, stream_state: Mapping[str, Any]) -> tuple[Optional[Any], Optional[str]]:
+        parent_state = stream_state.get("parent_state")
+        if isinstance(parent_state, Mapping):
+            phone_parent_state = parent_state.get(cls._parent_stream_name)
+            if isinstance(phone_parent_state, Mapping):
+                value = phone_parent_state.get(cls._parent_cursor_field)
+                if value not in (None, ""):
+                    return value, "parent_state"
+                value = phone_parent_state.get(cls._child_cursor_field)
+                if value not in (None, ""):
+                    return value, "parent_state.recording_date_time"
+
+        legacy_parent_state = stream_state.get(cls._parent_stream_name)
+        if isinstance(legacy_parent_state, Mapping):
+            value = legacy_parent_state.get(cls._parent_cursor_field)
+            if value not in (None, ""):
+                return value, "phone_recordings.date_time"
+            value = legacy_parent_state.get(cls._child_cursor_field)
+            if value not in (None, ""):
+                return value, "phone_recordings.recording_date_time"
+
+        global_state = stream_state.get("state")
+        if isinstance(global_state, Mapping):
+            value = global_state.get(cls._parent_cursor_field)
+            if value not in (None, ""):
+                return value, "state.date_time"
+            value = global_state.get(cls._child_cursor_field)
+            if value not in (None, ""):
+                return value, "state.recording_date_time"
+
+        value = stream_state.get(cls._parent_cursor_field)
+        if value not in (None, ""):
+            return value, "date_time"
+
+        value = stream_state.get(cls._child_cursor_field)
+        if value not in (None, ""):
+            return value, "recording_date_time"
+
+        return None, None
+
+    @classmethod
+    def _has_valid_parent_state(cls, stream_state: Mapping[str, Any]) -> bool:
+        parent_state = stream_state.get("parent_state")
+        if not isinstance(parent_state, Mapping):
+            return False
+        phone_parent_state = parent_state.get(cls._parent_stream_name)
+        return (
+            isinstance(phone_parent_state, Mapping)
+            and phone_parent_state.get(cls._parent_cursor_field) not in (None, "")
+        )
+
+    def should_migrate(self, stream_state: Mapping[str, Any]) -> bool:
+        if not stream_state or self._has_valid_parent_state(stream_state):
+            return False
+        cursor_value, _ = self._candidate_parent_cursor(stream_state)
+        return cursor_value not in (None, "")
+
+    def migrate(self, stream_state: Mapping[str, Any]) -> Mapping[str, Any]:
+        cursor_value, source = self._candidate_parent_cursor(stream_state)
+        if cursor_value in (None, ""):
+            return stream_state
+
+        migrated = dict(stream_state)
+        existing_parent_state = migrated.get("parent_state")
+        parent_state = dict(existing_parent_state) if isinstance(existing_parent_state, Mapping) else {}
+        existing_phone_state = parent_state.get(self._parent_stream_name)
+        phone_state = dict(existing_phone_state) if isinstance(existing_phone_state, Mapping) else {}
+        phone_state[self._parent_cursor_field] = cursor_value
+        parent_state[self._parent_stream_name] = phone_state
+        migrated["parent_state"] = parent_state
+
+        self._logger.info(
+            "[phone_transcript_state] repaired_parent_state "
+            f"parent={self._parent_stream_name} source={source} cursor={cursor_value}"
+        )
+        return migrated
 
 
 @dataclass
@@ -202,6 +297,13 @@ class ZoomPhoneLoggingRequester(HttpRequester):
     _metrics_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _active_http_request_count: int = field(default=0, init=False, repr=False)
     _last_activity_monotonic: float = field(default_factory=time.monotonic, init=False, repr=False)
+    _parent_progress_lock: ClassVar[Lock] = Lock()
+    _parent_scan_started_logged: ClassVar[bool] = False
+    _parent_progress_count: ClassVar[int] = 0
+    _parent_progress_cache_hits: ClassVar[int] = 0
+    _parent_progress_total_duration_ms: ClassVar[int] = 0
+    _parent_progress_last_from: ClassVar[Optional[str]] = None
+    _parent_progress_last_to: ClassVar[Optional[str]] = None
 
     def __post_init__(self, parameters: Mapping[str, Any]) -> None:
         # Let Airbyte own the cache implementation. The optional alias only makes
@@ -347,6 +449,15 @@ class ZoomPhoneLoggingRequester(HttpRequester):
                 ]
             )
 
+        if self.requester_role == "transcript_parent":
+            with ZoomPhoneLoggingRequester._parent_progress_lock:
+                last_from = ZoomPhoneLoggingRequester._parent_progress_last_from
+                last_to = ZoomPhoneLoggingRequester._parent_progress_last_to
+            if last_from is not None:
+                fields.append(f"last_from={last_from}")
+            if last_to is not None:
+                fields.append(f"last_to={last_to}")
+
         self.logger.info(" ".join(fields))
 
     def _periodic_summary_loop(self) -> None:
@@ -386,6 +497,64 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             ).start()
             self._periodic_logger_started = True
 
+    def _log_parent_scan_start(self, params: Mapping[str, Any]) -> None:
+        if self.requester_role != "transcript_parent":
+            return
+
+        with ZoomPhoneLoggingRequester._parent_progress_lock:
+            if ZoomPhoneLoggingRequester._parent_scan_started_logged:
+                return
+            ZoomPhoneLoggingRequester._parent_scan_started_logged = True
+
+        fields = [f"[{self.name}]", "role=transcript_parent", "parent_scan=start"]
+        if params.get("from") is not None:
+            fields.append(f"from={params['from']}")
+        if params.get("to") is not None:
+            fields.append(f"to={params['to']}")
+        self.logger.info(" ".join(fields))
+
+    def _record_parent_progress(self, params: Mapping[str, Any], duration_ms: int, from_cache: bool) -> None:
+        if self.requester_role != "transcript_parent":
+            return
+
+        summary = None
+        with ZoomPhoneLoggingRequester._parent_progress_lock:
+            ZoomPhoneLoggingRequester._parent_progress_count += 1
+            ZoomPhoneLoggingRequester._parent_progress_total_duration_ms += duration_ms
+            if from_cache:
+                ZoomPhoneLoggingRequester._parent_progress_cache_hits += 1
+
+            if params.get("from") is not None:
+                ZoomPhoneLoggingRequester._parent_progress_last_from = str(params["from"])
+            if params.get("to") is not None:
+                ZoomPhoneLoggingRequester._parent_progress_last_to = str(params["to"])
+
+            count = ZoomPhoneLoggingRequester._parent_progress_count
+            if count % self._summary_every == 0:
+                summary = (
+                    count,
+                    ZoomPhoneLoggingRequester._parent_progress_cache_hits,
+                    ZoomPhoneLoggingRequester._parent_progress_total_duration_ms,
+                    ZoomPhoneLoggingRequester._parent_progress_last_from,
+                    ZoomPhoneLoggingRequester._parent_progress_last_to,
+                )
+
+        if summary is not None:
+            count, cache_hits, total_duration_ms, last_from, last_to = summary
+            fields = [
+                f"[{self.name}]",
+                "role=transcript_parent",
+                f"parent_requests={count}",
+                f"avg_ms={round(total_duration_ms / count) if count else 0}",
+                f"cache_hits={cache_hits}",
+                f"cache={(cache_hits / count) * 100 if count else 0.0:.1f}%",
+            ]
+            if last_from is not None:
+                fields.append(f"last_from={last_from}")
+            if last_to is not None:
+                fields.append(f"last_to={last_to}")
+            self.logger.info(" ".join(fields))
+
     def send_request(
         self,
         stream_state: Optional[Any] = None,
@@ -417,6 +586,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             next_page_token,
             request_params,
         )
+        self._log_parent_scan_start(params)
         started = time.monotonic()
 
         try:
@@ -465,6 +635,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         headers = response.headers
         from_cache = bool(getattr(response, "from_cache", False))
         request_count = self._record_request_metrics(duration_ms, from_cache)
+        self._record_parent_progress(params, duration_ms, from_cache)
 
         fields = [
             f"[{self.name}]",
@@ -505,7 +676,7 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         if response.status_code == HTTPStatus.TOO_MANY_REQUESTS or response.status_code >= 500:
             self.logger.warning(message)
 
-        if request_count % self._summary_every == 0:
+        if self.requester_role != "transcript_parent" and request_count % self._summary_every == 0:
             self._log_summary()
 
         return response
