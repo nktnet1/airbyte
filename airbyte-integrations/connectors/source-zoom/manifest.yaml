@@ -7048,11 +7048,9 @@ definitions:
           type: HttpResponseFilter
       - type: DefaultErrorHandler
     type: CustomRequester
-    class_name: source_declarative_manifest.components.ZoomPhoneCachedRequester
+    class_name: source_declarative_manifest.components.ZoomPhoneTranscriptRequester
     rate_limit_category: LIGHT
     requester_role: transcript_download
-    cache_name: phone_transcript_download
-    use_cache: true
   phone_transcript_parent_router:
     type: SubstreamPartitionRouter
     parent_stream_configs:
