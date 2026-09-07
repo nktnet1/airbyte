@@ -13,17 +13,20 @@ from http import HTTPStatus
 from importlib.metadata import PackageNotFoundError, version as package_version
 from threading import Lock, Thread
 from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Union
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
+import orjson
 import requests
 from requests import HTTPError
 
+from airbyte_cdk.models import AirbyteLogMessage, AirbyteMessage, AirbyteMessageSerializer, Level, Type
 from airbyte_cdk.sources.declarative.auth.declarative_authenticator import NoAuth
 from airbyte_cdk.sources.declarative.interpolation import InterpolatedString
 from airbyte_cdk.sources.declarative.migrations.state_migration import StateMigration
 from airbyte_cdk.sources.declarative.extractors.record_extractor import RecordExtractor
 from airbyte_cdk.sources.declarative.partition_routers.substream_partition_router import SafeResponse
 from airbyte_cdk.sources.declarative.requesters.http_requester import HttpRequester
+from airbyte_cdk.sources.streams.http import HttpClient
 from airbyte_cdk.sources.declarative.types import Config
 
 
@@ -270,6 +273,162 @@ class TimelineRecordExtractor(RecordExtractor):
                 yield dict(item)
 
 
+class ZoomPhoneObservedHttpClient:
+    """Observe parent HTTP traffic at the actual HttpClient boundary.
+
+    Parent streams can spend a long time traversing empty slices without yielding
+    records.  Logging through the normal stream/message path can therefore leave
+    the Airbyte UI silent.  This wrapper emits compact, valid Airbyte LOG protocol
+    messages directly from the HTTP loop so progress is visible immediately.
+    """
+
+    _protocol_output_lock: ClassVar[Lock] = Lock()
+
+    def __init__(
+        self,
+        delegate: HttpClient,
+        *,
+        display_name: str,
+        requester_role: str,
+        summary_every: int = 200,
+    ) -> None:
+        self._delegate = delegate
+        self._display_name = display_name
+        self._requester_role = requester_role
+        self._summary_every = max(1, int(summary_every))
+        self._metrics_lock = Lock()
+        self._request_count = 0
+        self._cache_hit_count = 0
+        self._total_duration_ms = 0
+        self._start_logged = False
+        self._last_from: Optional[str] = None
+        self._last_to: Optional[str] = None
+        self._last_status: Optional[int] = None
+
+    @classmethod
+    def _emit_airbyte_info(cls, message: str) -> None:
+        airbyte_message = AirbyteMessage(
+            type=Type.LOG,
+            log=AirbyteLogMessage(level=Level.INFO, message=message),
+        )
+        serialized = orjson.dumps(AirbyteMessageSerializer.dump(airbyte_message)).decode("utf-8")
+        # Airbyte's own HttpClient uses direct, flushed protocol output when a
+        # message must escape an HTTP/retry loop immediately. Keep each line
+        # short and serialize writes from our own observer instances.
+        with cls._protocol_output_lock:
+            print(f"{serialized}\n", end="", flush=True)
+
+    @staticmethod
+    def _query_value(url: str, params: Optional[Mapping[str, Any]], key: str) -> Optional[str]:
+        if params and params.get(key) is not None:
+            return str(params[key])
+        values = parse_qs(urlsplit(url).query).get(key)
+        return str(values[0]) if values else None
+
+    def send_request(
+        self,
+        http_method: str,
+        url: str,
+        request_kwargs: Mapping[str, Any],
+        headers: Optional[Mapping[str, str]] = None,
+        params: Optional[Mapping[str, str]] = None,
+        json: Optional[Mapping[str, Any]] = None,
+        data: Optional[Union[str, Mapping[str, Any]]] = None,
+        dedupe_query_params: bool = False,
+        log_formatter: Optional[Callable[[requests.Response], Any]] = None,
+        exit_on_rate_limit: Optional[bool] = False,
+    ) -> tuple[requests.PreparedRequest, requests.Response]:
+        if self._requester_role == "transcript_parent":
+            start_from = self._query_value(url, params, "from")
+            start_to = self._query_value(url, params, "to")
+            should_log_start = False
+            with self._metrics_lock:
+                if not self._start_logged:
+                    self._start_logged = True
+                    should_log_start = True
+            if should_log_start:
+                fields = [
+                    f"[{self._display_name}]",
+                    "role=transcript_parent",
+                    "parent_http=start",
+                ]
+                if start_from is not None:
+                    fields.append(f"from={start_from}")
+                if start_to is not None:
+                    fields.append(f"to={start_to}")
+                self._emit_airbyte_info(" ".join(fields))
+
+        started = time.monotonic()
+        request, response = self._delegate.send_request(
+            http_method=http_method,
+            url=url,
+            request_kwargs=request_kwargs,
+            headers=headers,
+            params=params,
+            json=json,
+            data=data,
+            dedupe_query_params=dedupe_query_params,
+            log_formatter=log_formatter,
+            exit_on_rate_limit=exit_on_rate_limit,
+        )
+
+        if self._requester_role != "transcript_parent":
+            return request, response
+
+        duration_ms = round((time.monotonic() - started) * 1000)
+        from_cache = bool(getattr(response, "from_cache", False))
+        request_from = self._query_value(request.url or url, None, "from")
+        request_to = self._query_value(request.url or url, None, "to")
+        summary = None
+
+        with self._metrics_lock:
+            self._request_count += 1
+            self._total_duration_ms += duration_ms
+            if from_cache:
+                self._cache_hit_count += 1
+            if request_from is not None:
+                self._last_from = request_from
+            if request_to is not None:
+                self._last_to = request_to
+            self._last_status = response.status_code
+
+            count = self._request_count
+            if count == 1 or count % self._summary_every == 0:
+                summary = (
+                    count,
+                    self._cache_hit_count,
+                    self._total_duration_ms,
+                    self._last_from,
+                    self._last_to,
+                    self._last_status,
+                )
+
+        if summary is not None:
+            count, cache_hits, total_ms, last_from, last_to, last_status = summary
+            network_requests = count - cache_hits
+            fields = [
+                f"[{self._display_name}]",
+                "role=transcript_parent",
+                f"parent_http_requests={count}",
+                f"network={network_requests}",
+                f"cache_hits={cache_hits}",
+                f"cache={(cache_hits / count) * 100 if count else 0.0:.1f}%",
+                f"avg_ms={round(total_ms / count) if count else 0}",
+            ]
+            if last_status is not None:
+                fields.append(f"last_status={last_status}")
+            if last_from is not None:
+                fields.append(f"last_from={last_from}")
+            if last_to is not None:
+                fields.append(f"last_to={last_to}")
+            self._emit_airbyte_info(" ".join(fields))
+
+        return request, response
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+
 @dataclass
 class ZoomPhoneLoggingRequester(HttpRequester):
     """
@@ -297,13 +456,6 @@ class ZoomPhoneLoggingRequester(HttpRequester):
     _metrics_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _active_http_request_count: int = field(default=0, init=False, repr=False)
     _last_activity_monotonic: float = field(default_factory=time.monotonic, init=False, repr=False)
-    _parent_progress_lock: ClassVar[Lock] = Lock()
-    _parent_scan_started_logged: ClassVar[bool] = False
-    _parent_progress_count: ClassVar[int] = 0
-    _parent_progress_cache_hits: ClassVar[int] = 0
-    _parent_progress_total_duration_ms: ClassVar[int] = 0
-    _parent_progress_last_from: ClassVar[Optional[str]] = None
-    _parent_progress_last_to: ClassVar[Optional[str]] = None
 
     def __post_init__(self, parameters: Mapping[str, Any]) -> None:
         # Let Airbyte own the cache implementation. The optional alias only makes
@@ -314,6 +466,14 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             super().__post_init__(parameters)
         finally:
             self.name = display_name
+
+        if self.requester_role == "transcript_parent":
+            self._http_client = ZoomPhoneObservedHttpClient(
+                self._http_client,
+                display_name=display_name,
+                requester_role=self.requester_role,
+                summary_every=self._summary_every,
+            )
 
         if not ZoomPhoneLoggingRequester._runtime_version_logged:
             with ZoomPhoneLoggingRequester._runtime_version_lock:
@@ -449,15 +609,6 @@ class ZoomPhoneLoggingRequester(HttpRequester):
                 ]
             )
 
-        if self.requester_role == "transcript_parent":
-            with ZoomPhoneLoggingRequester._parent_progress_lock:
-                last_from = ZoomPhoneLoggingRequester._parent_progress_last_from
-                last_to = ZoomPhoneLoggingRequester._parent_progress_last_to
-            if last_from is not None:
-                fields.append(f"last_from={last_from}")
-            if last_to is not None:
-                fields.append(f"last_to={last_to}")
-
         self.logger.info(" ".join(fields))
 
     def _periodic_summary_loop(self) -> None:
@@ -497,64 +648,6 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             ).start()
             self._periodic_logger_started = True
 
-    def _log_parent_scan_start(self, params: Mapping[str, Any]) -> None:
-        if self.requester_role != "transcript_parent":
-            return
-
-        with ZoomPhoneLoggingRequester._parent_progress_lock:
-            if ZoomPhoneLoggingRequester._parent_scan_started_logged:
-                return
-            ZoomPhoneLoggingRequester._parent_scan_started_logged = True
-
-        fields = [f"[{self.name}]", "role=transcript_parent", "parent_scan=start"]
-        if params.get("from") is not None:
-            fields.append(f"from={params['from']}")
-        if params.get("to") is not None:
-            fields.append(f"to={params['to']}")
-        self.logger.info(" ".join(fields))
-
-    def _record_parent_progress(self, params: Mapping[str, Any], duration_ms: int, from_cache: bool) -> None:
-        if self.requester_role != "transcript_parent":
-            return
-
-        summary = None
-        with ZoomPhoneLoggingRequester._parent_progress_lock:
-            ZoomPhoneLoggingRequester._parent_progress_count += 1
-            ZoomPhoneLoggingRequester._parent_progress_total_duration_ms += duration_ms
-            if from_cache:
-                ZoomPhoneLoggingRequester._parent_progress_cache_hits += 1
-
-            if params.get("from") is not None:
-                ZoomPhoneLoggingRequester._parent_progress_last_from = str(params["from"])
-            if params.get("to") is not None:
-                ZoomPhoneLoggingRequester._parent_progress_last_to = str(params["to"])
-
-            count = ZoomPhoneLoggingRequester._parent_progress_count
-            if count % self._summary_every == 0:
-                summary = (
-                    count,
-                    ZoomPhoneLoggingRequester._parent_progress_cache_hits,
-                    ZoomPhoneLoggingRequester._parent_progress_total_duration_ms,
-                    ZoomPhoneLoggingRequester._parent_progress_last_from,
-                    ZoomPhoneLoggingRequester._parent_progress_last_to,
-                )
-
-        if summary is not None:
-            count, cache_hits, total_duration_ms, last_from, last_to = summary
-            fields = [
-                f"[{self.name}]",
-                "role=transcript_parent",
-                f"parent_requests={count}",
-                f"avg_ms={round(total_duration_ms / count) if count else 0}",
-                f"cache_hits={cache_hits}",
-                f"cache={(cache_hits / count) * 100 if count else 0.0:.1f}%",
-            ]
-            if last_from is not None:
-                fields.append(f"last_from={last_from}")
-            if last_to is not None:
-                fields.append(f"last_to={last_to}")
-            self.logger.info(" ".join(fields))
-
     def send_request(
         self,
         stream_state: Optional[Any] = None,
@@ -586,7 +679,6 @@ class ZoomPhoneLoggingRequester(HttpRequester):
             next_page_token,
             request_params,
         )
-        self._log_parent_scan_start(params)
         started = time.monotonic()
 
         try:
@@ -635,7 +727,6 @@ class ZoomPhoneLoggingRequester(HttpRequester):
         headers = response.headers
         from_cache = bool(getattr(response, "from_cache", False))
         request_count = self._record_request_metrics(duration_ms, from_cache)
-        self._record_parent_progress(params, duration_ms, from_cache)
 
         fields = [
             f"[{self.name}]",
