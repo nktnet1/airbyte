@@ -106,7 +106,7 @@ class TimelineRecordExtractor(RecordExtractor):
     """Extract timeline entries and report whether Airbyte used lazy, cached HTTP, or network HTTP."""
 
     config: Config
-    _summary_every: ClassVar[int] = 200
+    _summary_every: ClassVar[int] = 1000
     _logger: ClassVar[logging.Logger] = logging.getLogger("airbyte.phone_recording_transcript_timeline")
     _path_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _response_count: int = field(default=0, init=False, repr=False)

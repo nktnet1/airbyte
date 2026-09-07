@@ -1,8 +1,15 @@
-version: 5.14.0
+version: 7.28.3
 concurrency_level:
   type: ConcurrencyLevel
   default_concurrency: "{{ config.get('num_workers', 20) }}"
   max_concurrency: 40
+stream_groups:
+  phone_transcript_downloads:
+    streams:
+    - $ref: '#/definitions/phone_recording_transcripts_stream'
+    - $ref: '#/definitions/phone_recording_transcript_timeline_stream'
+    action:
+      type: BlockSimultaneousSyncsAction
 definitions:
   requester:
     url_base: "https://api.zoom.us/v2"
@@ -7259,20 +7266,123 @@ definitions:
     type: DeclarativeStream
     name: "phone_recording_transcripts"
     primary_key: recording_id
-  phone_transcript_timeline_parent_router:
-    type: SubstreamPartitionRouter
-    parent_stream_configs:
-    - stream:
-        $ref: '#/definitions/phone_recording_transcripts_stream'
-      parent_key: recording_id
-      partition_field: parent_id
-      extra_fields:
-      - - call_id
-      - - call_log_id
-      - - recording_date_time
-      lazy_read_pointer:
-      - timeline
-      type: ParentStreamConfig
+  phone_recording_transcript_timeline_stream:
+    retriever:
+      requester:
+        $ref: '#/definitions/phone_transcript_requester'
+      record_selector:
+        extractor:
+          type: CustomRecordExtractor
+          class_name: source_declarative_manifest.components.TimelineRecordExtractor
+        type: RecordSelector
+        record_filter:
+          type: RecordFilter
+          condition: "{{ record.get('ts') not in [None, ''] and record.get('end_ts') not in [None, ''] }}"
+      partition_router:
+        $ref: '#/definitions/phone_transcript_parent_router'
+      type: SimpleRetriever
+    incremental_sync:
+      $ref: '#/definitions/phone_transcript_incremental_sync'
+    transformations:
+    - type: AddFields
+      fields:
+      - path:
+        - timeline_id
+        value: "{{ stream_partition.parent_id ~ '-' ~ record['ts'] ~ '-' ~ record['end_ts'] }}"
+        type: AddedFieldDefinition
+      - path:
+        - recording_id
+        value: '{{ stream_partition.parent_id }}'
+        type: AddedFieldDefinition
+      - path:
+        - call_id
+        value: "{{ stream_slice.extra_fields.get('call_id') }}"
+        type: AddedFieldDefinition
+      - path:
+        - call_log_id
+        value: "{{ stream_slice.extra_fields.get('call_log_id') }}"
+        type: AddedFieldDefinition
+      - path:
+        - recording_date_time
+        value: "{{ stream_slice.extra_fields.get('date_time') }}"
+        type: AddedFieldDefinition
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        $schema: http://json-schema.org/draft-07/schema#
+        type: object
+        additionalProperties: true
+        properties:
+          timeline_id:
+            type: string
+          recording_id:
+            type: string
+          call_id:
+            type:
+            - 'null'
+            - string
+          call_log_id:
+            type:
+            - 'null'
+            - string
+          text:
+            type:
+            - 'null'
+            - string
+          raw_text:
+            type:
+            - 'null'
+            - string
+          ts:
+            type: string
+          end_ts:
+            type: string
+          language:
+            type:
+            - 'null'
+            - string
+          userId:
+            type:
+            - 'null'
+            - string
+          userIds:
+            type:
+            - 'null'
+            - array
+            items:
+              type:
+              - 'null'
+              - string
+          channelMark:
+            type:
+            - 'null'
+            - string
+          users:
+            type:
+            - 'null'
+            - array
+            items:
+              type: object
+              additionalProperties: true
+          word_items:
+            type:
+            - 'null'
+            - array
+            items:
+              type: object
+              additionalProperties: true
+          recording_date_time:
+            type:
+            - 'null'
+            - string
+        required:
+        - timeline_id
+        - recording_id
+        - ts
+        - end_ts
+    type: DeclarativeStream
+    name: phone_recording_transcript_timeline
+    primary_key: timeline_id
 streams:
 - retriever:
     requester:
@@ -14885,122 +14995,7 @@ streams:
   name: "phone_recordings"
   primary_key: id
 - $ref: '#/definitions/phone_recording_transcripts_stream'
-- retriever:
-    requester:
-      $ref: '#/definitions/phone_transcript_requester'
-    record_selector:
-      extractor:
-        type: CustomRecordExtractor
-        class_name: source_declarative_manifest.components.TimelineRecordExtractor
-      type: RecordSelector
-      record_filter:
-        type: RecordFilter
-        condition: "{{ record.get('ts') not in [None, ''] and record.get('end_ts') not in [None, ''] }}"
-    partition_router:
-      $ref: '#/definitions/phone_transcript_timeline_parent_router'
-    type: SimpleRetriever
-  incremental_sync:
-    $ref: '#/definitions/phone_transcript_incremental_sync'
-  transformations:
-  - type: AddFields
-    fields:
-    - path:
-      - timeline_id
-      value: "{{ stream_partition.parent_id ~ '-' ~ record['ts'] ~ '-' ~ record['end_ts'] }}"
-      type: AddedFieldDefinition
-    - path:
-      - recording_id
-      value: '{{ stream_partition.parent_id }}'
-      type: AddedFieldDefinition
-    - path:
-      - call_id
-      value: "{{ stream_slice.extra_fields.get('call_id') }}"
-      type: AddedFieldDefinition
-    - path:
-      - call_log_id
-      value: "{{ stream_slice.extra_fields.get('call_log_id') }}"
-      type: AddedFieldDefinition
-    - path:
-      - recording_date_time
-      value: "{{ stream_slice.extra_fields.get('recording_date_time') }}"
-      type: AddedFieldDefinition
-  schema_loader:
-    type: InlineSchemaLoader
-    schema:
-      $schema: http://json-schema.org/draft-07/schema#
-      type: object
-      additionalProperties: true
-      properties:
-        timeline_id:
-          type: string
-        recording_id:
-          type: string
-        call_id:
-          type:
-          - 'null'
-          - string
-        call_log_id:
-          type:
-          - 'null'
-          - string
-        text:
-          type:
-          - 'null'
-          - string
-        raw_text:
-          type:
-          - 'null'
-          - string
-        ts:
-          type: string
-        end_ts:
-          type: string
-        language:
-          type:
-          - 'null'
-          - string
-        userId:
-          type:
-          - 'null'
-          - string
-        userIds:
-          type:
-          - 'null'
-          - array
-          items:
-            type:
-            - 'null'
-            - string
-        channelMark:
-          type:
-          - 'null'
-          - string
-        users:
-          type:
-          - 'null'
-          - array
-          items:
-            type: object
-            additionalProperties: true
-        word_items:
-          type:
-          - 'null'
-          - array
-          items:
-            type: object
-            additionalProperties: true
-        recording_date_time:
-          type:
-          - 'null'
-          - string
-      required:
-      - timeline_id
-      - recording_id
-      - ts
-      - end_ts
-  type: DeclarativeStream
-  name: phone_recording_transcript_timeline
-  primary_key: timeline_id
+- $ref: '#/definitions/phone_recording_transcript_timeline_stream'
 api_budget:
   type: HTTPAPIBudget
   policies:
