@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 import requests
 from requests import HTTPError
 
-from airbyte_cdk.models import AirbyteLogMessage, AirbyteMessage, Level, Type
+from airbyte_cdk.models import Level
 from airbyte_cdk.sources.declarative.auth.declarative_authenticator import NoAuth
 from airbyte_cdk.sources.declarative.interpolation import InterpolatedString
 from airbyte_cdk.sources.declarative.migrations.state_migration import StateMigration
@@ -341,15 +341,10 @@ class ZoomPhoneHttpClient(HttpClient):
         )
 
     def _emit(self, level: Level, message: str) -> None:
-        if self._message_repository is not None:
-            self._message_repository.emit_message(
-                AirbyteMessage(
-                    type=Type.LOG,
-                    log=AirbyteLogMessage(level=level, message=message),
-                )
-            )
-            return
-
+        # Custom requesters are not guaranteed to receive Airbyte's live
+        # message repository. Use the HttpClient logger directly; this is the
+        # same logger path already proven to surface requester configuration
+        # messages from concurrent parent reads.
         if level in (Level.ERROR, Level.FATAL):
             self._logger.error(message)
         elif level == Level.WARN:
