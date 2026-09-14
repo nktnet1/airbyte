@@ -16,7 +16,7 @@ data:
   connectorSubtype: api
   connectorType: source
   definitionId: d2491549-1d5d-4b91-a7ac-8ced4aae929e
-  dockerImageTag: 0.0.1
+  dockerImageTag: 0.0.2
   dockerRepository: airbyte/source-uscreen
   githubIssueLabel: source-uscreen
   icon: icon.svg
