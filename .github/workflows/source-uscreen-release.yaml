@@ -1,0 +1,65 @@
+name: Release Source Uscreen
+
+on:
+  push:
+    tags:
+      - "source-uscreen-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Airbyte CDK
+        run: |
+          uv tool install 'airbyte-cdk[dev]==7.28.3'
+          echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#source-uscreen-v}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing Source Uscreen version: $VERSION"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Source Uscreen image
+        working-directory: airbyte-integrations/connectors/source-uscreen
+        run: |
+          airbyte-cdk image build . \
+            --tag "${{ steps.version.outputs.version }}"
+
+      - name: Tag Source Uscreen image
+        run: |
+          docker tag \
+            "airbyte/source-uscreen:${{ steps.version.outputs.version }}" \
+            "ghcr.io/${{ github.repository_owner }}/airbyte-source-uscreen:${{ steps.version.outputs.version }}"
+
+      - name: Push Source Uscreen image
+        run: |
+          docker push \
+            "ghcr.io/${{ github.repository_owner }}/airbyte-source-uscreen:${{ steps.version.outputs.version }}"
